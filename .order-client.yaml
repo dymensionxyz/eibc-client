@@ -1,0 +1,12 @@
+keyring_backend: "test"
+account_name: "hub_10d0"
+mnemonic: ""
+node_address: "http://localhost:36657"
+chain_id: "dymension_100-1"
+gas_prices: "2000000000adym"
+gas_fees: ""
+slack:
+  enabled: true
+  bot_token: "your_bot_token"
+  app_token: ""
+  channel_id: "poor-bots"
