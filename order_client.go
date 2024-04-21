@@ -110,13 +110,14 @@ func newOrderClient(config Config) (*orderClient, error) {
 		}
 		oc.account = mustConvertAccount(account)
 
-		logger.Info("using existing account",
-			zap.String("oc.accountName", oc.accountName),
-			zap.String("account.Name", account.Name),
-			zap.String("account.PubKey", oc.account.GetPubKey().String()),
-			zap.String("account.Address", oc.account.GetAddress().String()),
-		)
 	}
+	logger.Info("using account",
+		zap.String("oc.accountName", oc.accountName),
+		zap.String("account.PubKey", oc.account.GetPubKey().String()),
+		zap.String("account.Address", oc.account.GetAddress().String()),
+		zap.String("keyring-backend", config.KeyringBackend),
+		zap.String("home-dir", config.HomeDir),
+	)
 
 	return oc, nil
 }

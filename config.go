@@ -10,7 +10,8 @@ import (
 )
 
 type Config struct {
-	KeyringBackend string `mapstructure:"keyring_backend" default:"test"`
+	KeyringBackend string `mapstructure:"keyring_backend"`
+	HomeDir        string `mapstructure:"home_dir"`
 	AccountName    string `mapstructure:"account_name"`
 	Mnemonic       string `mapstructure:"mnemonic"`
 	NodeAddress    string `mapstructure:"node_address"`
@@ -50,6 +51,7 @@ const (
 func getCosmosClientOptions(config Config) []cosmosclient.Option {
 	options := []cosmosclient.Option{
 		cosmosclient.WithAddressPrefix(hubAddressPrefix),
+		cosmosclient.WithHome(config.HomeDir),
 		cosmosclient.WithBroadcastMode(flags.BroadcastBlock),
 		cosmosclient.WithNodeAddress(config.NodeAddress),
 		cosmosclient.WithFees(config.GasFees),

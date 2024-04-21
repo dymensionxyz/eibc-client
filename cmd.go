@@ -44,7 +44,16 @@ func init() {
 
 func initConfig() {
 	// Set default values
+	// Find home directory.
+	home, err := homedir.Dir()
+	if err != nil {
+		log.Fatalf("failed to get home directory: %v", err)
+	}
+	defaultHomeDir := home + "/.dymension"
+
 	viper.SetDefault("keyring_backend", testKeyringBackend)
+	viper.SetDefault("keyring_dir", defaultHomeDir)
+	viper.SetDefault("home_dir", defaultHomeDir)
 	viper.SetDefault("node_address", nodeAddress)
 	viper.SetDefault("chain_id", chainID)
 	viper.SetDefault("gas_prices", defaultGasPrices)
@@ -56,12 +65,6 @@ func initConfig() {
 		// Use config file from the flag.
 		viper.SetConfigFile(cfgFile)
 	} else {
-		// Find home directory.
-		home, err := homedir.Dir()
-		if err != nil {
-			log.Fatalf("failed to get home directory: %v", err)
-		}
-
 		viper.AddConfigPath(home)
 		viper.AddConfigPath(".")
 		viper.SetConfigName(".order-client")
