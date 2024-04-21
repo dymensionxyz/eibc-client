@@ -109,6 +109,13 @@ func newOrderClient(config Config) (*orderClient, error) {
 			return nil, fmt.Errorf("failed to get account: %w", err)
 		}
 		oc.account = mustConvertAccount(account)
+
+		logger.Info("using existing account",
+			zap.String("oc.accountName", oc.accountName),
+			zap.String("account.Name", account.Name),
+			zap.String("account.PubKey", oc.account.GetPubKey().String()),
+			zap.String("account.Address", oc.account.GetAddress().String()),
+		)
 	}
 
 	return oc, nil
