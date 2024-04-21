@@ -22,7 +22,7 @@ func (oc *orderClient) orderFulfiller(ctx context.Context) {
 			oc.logger.Info("DYM balance low, paused order fulfillments")
 			return false
 		}
-		if err := oc.fulfillOrders(); err != nil {
+		if err := oc.fulfillOrders(ctx); err != nil {
 			oc.logger.Error("failed to fulfill orders", zap.Error(err))
 		}
 		return false // don't stop me now

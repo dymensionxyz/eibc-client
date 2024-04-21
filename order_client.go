@@ -50,15 +50,14 @@ func newOrderClient(config Config) (*orderClient, error) {
 		context.Background(),
 		getCosmosClientOptions(config)...,
 	)
-
-	sdkcfg := sdk.GetConfig()
-	sdkcfg.SetBech32PrefixForAccount(hubAddressPrefix, pubKeyPrefix)
-
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cosmos client: %w", err)
 	}
 
-	logger, err := zap.NewDevelopment()
+	sdkcfg := sdk.GetConfig()
+	sdkcfg.SetBech32PrefixForAccount(hubAddressPrefix, pubKeyPrefix)
+
+	logger, err := zap.NewProduction()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create logger: %w", err)
 	}
@@ -226,7 +225,7 @@ func (oc *orderClient) resToDemandOrder(res tmtypes.ResultEvent) {
 	}
 }
 
-func (oc *orderClient) fulfillOrders() error {
+func (oc *orderClient) fulfillOrders(ctx context.Context) error {
 	toFulfillIDs := make([]string, 0, len(oc.demandOrders))
 
 	oc.domu.Lock()
@@ -246,6 +245,15 @@ outer:
 				continue outer
 			}
 		}
+		// TODO: make it more efficient
+		gotBalance, err := oc.checkBalance(ctx, order.price)
+		if err != nil {
+			return fmt.Errorf("failed to check balance: %w", err)
+		}
+		if !gotBalance {
+			continue
+		}
+
 		toFulfillIDs = append(toFulfillIDs, order.id)
 		if oc.maxOrdersPerTx > 0 && len(toFulfillIDs) >= oc.maxOrdersPerTx {
 			break
@@ -300,7 +308,8 @@ func (oc *orderClient) checkBalances(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to parse minimum DYM balance for '%s': %w", minimumDymBalance, err)
 	}
-	if err := oc.checkBalance(ctx, sdk.NewCoins(minDym)); err != nil {
+	_, err = oc.checkBalance(ctx, sdk.NewCoins(minDym))
+	if err != nil {
 		return fmt.Errorf("failed to check balance: %w", err)
 	}
 
@@ -317,17 +326,18 @@ func (oc *orderClient) checkBalances(ctx context.Context) error {
 		orderCoins = orderCoins.Add(ord.price...)
 	}
 
-	if err := oc.checkBalance(ctx, orderCoins); err != nil {
+	_, err = oc.checkBalance(ctx, orderCoins)
+	if err != nil {
 		oc.logger.Error("failed to check balance", zap.Error(err))
 		return fmt.Errorf("failed to check balance: %w", err)
 	}
 	return nil
 }
 
-func (oc *orderClient) checkBalance(ctx context.Context, minCoins sdk.Coins) error {
+func (oc *orderClient) checkBalance(ctx context.Context, minCoins sdk.Coins) (bool, error) {
 	balances, err := oc.getAccountBalances(ctx, oc.account.GetAddress().String())
 	if err != nil {
-		return fmt.Errorf("failed to check account balance: %w", err)
+		return false, fmt.Errorf("failed to check account balance: %w", err)
 	}
 
 	oc.logger.Info("checking account balances",
@@ -344,11 +354,12 @@ func (oc *orderClient) checkBalance(ctx context.Context, minCoins sdk.Coins) err
 
 			oc.alertDenom(ctx, minCoin)
 			oc.skipDenom(minCoin.Denom)
+			return false, nil
 		} else {
 			oc.resetDenom(minCoin.Denom)
 		}
 	}
-	return nil
+	return true, nil
 }
 
 func (oc *orderClient) denomSkipped(denom string) bool {
