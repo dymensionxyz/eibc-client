@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	sdk "github.com/cosmos/cosmos-sdk/types"
 	"go.uber.org/zap"
 )
 
@@ -18,10 +19,28 @@ func (oc *orderClient) orderRefresher(ctx context.Context) {
 
 func (oc *orderClient) orderFulfiller(ctx context.Context) {
 	go oc.worker(ctx, "orderFulfiller", oc.fulfillInterval, func() bool {
-		if oc.denomSkipped("adym") { // TODO: const
+		/*if oc.denomSkipped("adym") { // TODO: const
+			oc.logger.Info("DYM balance low, paused order fulfillments")
+			return false
+		}*/
+
+		balance, err := oc.getAccountBalance(ctx, oc.account.GetAddress().String(), "adym")
+		if err != nil {
+			oc.logger.Error("failed to get account balance", zap.Error(err))
+			return false
+		}
+
+		minimumDymBalance, err := sdk.ParseCoinNormalized(oc.minimumDymBalance)
+		if err != nil {
+			oc.logger.Error("failed to parse minimum DYM balance", zap.Error(err))
+			return false
+		}
+
+		if balance.IsLT(minimumDymBalance) {
 			oc.logger.Info("DYM balance low, paused order fulfillments")
 			return false
 		}
+
 		if err := oc.fulfillOrders(ctx); err != nil {
 			oc.logger.Error("failed to fulfill orders", zap.Error(err))
 		}

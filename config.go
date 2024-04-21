@@ -10,14 +10,15 @@ import (
 )
 
 type Config struct {
-	KeyringBackend string `mapstructure:"keyring_backend"`
-	HomeDir        string `mapstructure:"home_dir"`
-	AccountName    string `mapstructure:"account_name"`
-	Mnemonic       string `mapstructure:"mnemonic"`
-	NodeAddress    string `mapstructure:"node_address"`
-	ChainID        string `mapstructure:"chain_id"`
-	GasPrices      string `mapstructure:"gas_prices"`
-	GasFees        string `mapstructure:"gas_fees"`
+	KeyringBackend    string `mapstructure:"keyring_backend"`
+	HomeDir           string `mapstructure:"home_dir"`
+	AccountName       string `mapstructure:"account_name"`
+	Mnemonic          string `mapstructure:"mnemonic"`
+	NodeAddress       string `mapstructure:"node_address"`
+	ChainID           string `mapstructure:"chain_id"`
+	GasPrices         string `mapstructure:"gas_prices"`
+	GasFees           string `mapstructure:"gas_fees"`
+	MinimumDymBalance string `mapstructure:"minimum_dym_balance"`
 
 	SlackConfig slackConfig `mapstructure:"slack"`
 }
@@ -31,15 +32,15 @@ type slackConfig struct {
 
 const (
 	// nodeAddress = "https://rpc.hwpd.noisnemyd.xyz:443"
-	nodeAddress           = "http://localhost:36657"
-	chainID               = "dymension_100-1"
-	hubAddressPrefix      = "dym"
-	pubKeyPrefix          = "pub"
-	defaultGasLimit       = 300000
-	defaultGasPrices      = "2000000000adym"
-	minimumDymBalance     = "997863676000000000adym"
-	testKeyringBackend    = "test"
-	defaultMaxOrdersPerTx = 10
+	nodeAddress              = "http://localhost:36657"
+	chainID                  = "dymension_100-1"
+	hubAddressPrefix         = "dym"
+	pubKeyPrefix             = "pub"
+	defaultGasLimit          = 300000
+	defaultGasPrices         = "2000000000adym"
+	defaultMinimumDymBalance = "40000000000adym"
+	testKeyringBackend       = "test"
+	defaultMaxOrdersPerTx    = 10
 
 	defaultRefreshInterval       = 30 * time.Second
 	defaultFulfillInterval       = 2 * time.Second

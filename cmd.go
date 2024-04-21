@@ -60,6 +60,7 @@ func initConfig() {
 	viper.SetDefault("account_name", "hub_"+uuid.Must(uuid.NewRandom()).String()[:4])
 	viper.SetDefault("slack.enabled", true)
 	viper.SetDefault("slack.channel_id", "poor-bots")
+	viper.SetDefault("minimum_dym_balance", defaultMinimumDymBalance)
 
 	if cfgFile != "" {
 		// Use config file from the flag.

@@ -25,10 +25,11 @@ type orderClient struct {
 	chainID string
 	node    string
 
-	domu           sync.Mutex
-	demandOrders   map[string]*demandOrder // id:demandOrder
-	maxOrdersPerTx int
-	disputePeriod  uint64
+	domu              sync.Mutex
+	demandOrders      map[string]*demandOrder // id:demandOrder
+	maxOrdersPerTx    int
+	minimumDymBalance string
+	disputePeriod     uint64
 
 	account     client.Account
 	accountName string
@@ -76,6 +77,7 @@ func newOrderClient(config Config) (*orderClient, error) {
 		logger:                logger,
 		chainID:               cosmosClient.Context().ChainID,
 		node:                  config.NodeAddress,
+		minimumDymBalance:     config.MinimumDymBalance,
 		maxOrdersPerTx:        defaultMaxOrdersPerTx,
 		refreshInterval:       defaultRefreshInterval,
 		fulfillInterval:       defaultFulfillInterval,
@@ -304,9 +306,9 @@ func (oc *orderClient) cleanup() error {
 
 func (oc *orderClient) checkBalances(ctx context.Context) error {
 	// check dym balance
-	minDym, err := sdk.ParseCoinNormalized(minimumDymBalance)
+	minDym, err := sdk.ParseCoinNormalized(oc.minimumDymBalance)
 	if err != nil {
-		return fmt.Errorf("failed to parse minimum DYM balance for '%s': %w", minimumDymBalance, err)
+		return fmt.Errorf("failed to parse minimum DYM balance for '%s': %w", oc.minimumDymBalance, err)
 	}
 	_, err = oc.checkBalance(ctx, sdk.NewCoins(minDym))
 	if err != nil {
