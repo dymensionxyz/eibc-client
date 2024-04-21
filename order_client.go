@@ -124,8 +124,8 @@ func newOrderClient(config Config) (*orderClient, error) {
 
 type demandOrder struct {
 	id                string
-	price             sdk.Coin
-	fee               sdk.Coin
+	price             sdk.Coins
+	fee               sdk.Coins
 	fulfilledAtHeight uint64
 	credited          bool
 }
@@ -172,7 +172,9 @@ func (oc *orderClient) refreshPendingDemandOrders(ctx context.Context) error {
 			continue
 		}
 		oc.demandOrders[d.Id] = &demandOrder{
-			id: d.Id,
+			id:    d.Id,
+			price: d.Price,
+			fee:   d.Fee,
 		}
 		newCount++
 	}
@@ -217,8 +219,8 @@ func (oc *orderClient) resToDemandOrder(res tmtypes.ResultEvent) {
 		}
 		order := &demandOrder{
 			id:    id,
-			price: price,
-			fee:   fee,
+			price: sdk.NewCoins(price),
+			fee:   sdk.NewCoins(fee),
 		}
 		oc.demandOrders[id] = order
 	}
@@ -230,10 +232,19 @@ func (oc *orderClient) fulfillOrders() error {
 	oc.domu.Lock()
 	defer oc.domu.Unlock()
 
+outer:
 	for _, order := range oc.demandOrders {
-		// if no funds for denom or already fulfilled, skip
-		if _, skip := oc.skipDenoms[order.price.Denom]; skip || order.fulfilledAtHeight > 0 {
+		// if no funds for at least one denom in the order or the order is already fulfilled, skip it
+		if order.fulfilledAtHeight > 0 {
 			continue
+		}
+		for _, price := range order.price {
+			if _, skip := oc.skipDenoms[price.Denom]; skip {
+				oc.logger.Info("skipping order because of low funds",
+					zap.String("id", order.id),
+					zap.String("denom", price.Denom))
+				continue outer
+			}
 		}
 		toFulfillIDs = append(toFulfillIDs, order.id)
 		if oc.maxOrdersPerTx > 0 && len(toFulfillIDs) >= oc.maxOrdersPerTx {
@@ -303,7 +314,7 @@ func (oc *orderClient) checkBalances(ctx context.Context) error {
 		if ord.fulfilledAtHeight > 0 {
 			continue
 		}
-		orderCoins = orderCoins.Add(ord.price)
+		orderCoins = orderCoins.Add(ord.price...)
 	}
 
 	if err := oc.checkBalance(ctx, orderCoins); err != nil {
