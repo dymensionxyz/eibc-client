@@ -142,7 +142,7 @@ func (oc *orderClient) start() error {
 	oc.orderFulfiller(ctx)
 	oc.orderCleaner(ctx)
 	oc.disputePeriodUpdater(ctx)
-	oc.accountBalanceChecker(ctx)
+	// oc.accountBalanceChecker(ctx)
 
 	make(chan struct{}) <- struct{}{} // TODO: make nicer
 
@@ -156,7 +156,7 @@ func (oc *orderClient) GetDemandOrders() map[string]*demandOrder {
 }
 
 func (oc *orderClient) refreshPendingDemandOrders(ctx context.Context) error {
-	oc.logger.Info("refreshing demand orders")
+	oc.logger.Debug("refreshing demand orders")
 
 	res, err := oc.getDemandOrdersByStatus(ctx, types.Status_PENDING.String())
 	if err != nil {
@@ -241,7 +241,7 @@ outer:
 		}
 		for _, price := range order.price {
 			if _, skip := oc.skipDenoms[price.Denom]; skip {
-				oc.logger.Info("skipping order because of low funds",
+				oc.logger.Debug("skipping order because of low funds",
 					zap.String("id", order.id),
 					zap.String("denom", price.Denom))
 				continue outer
