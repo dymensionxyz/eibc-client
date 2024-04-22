@@ -17,6 +17,7 @@ type demandOrder struct {
 	price             sdk.Coins
 	fee               sdk.Coins
 	fulfilledAtHeight uint64
+	alertedLowFunds   bool
 	credited          bool
 }
 
@@ -115,6 +116,7 @@ func (oc *orderClient) fulfillOrders(ctx context.Context) error {
 			return fmt.Errorf("failed to fulfill order: %w", err)
 		}
 
+		// mark the orders as fulfilled
 		for _, id := range toFulfillIDs {
 			latestHeight, err := oc.getLatestHeight(ctx)
 			if err != nil {
@@ -148,6 +150,14 @@ func (oc *orderClient) prepareDemandOrders(ctx context.Context) ([][]string, err
 		return nil, fmt.Errorf("failed to get account balances: %w", err)
 	}
 
+	gasBalance := accountBalances.AmountOf(oc.minimumGasBalance.Denom)
+	gasDiff := oc.minimumGasBalance.Amount.Sub(gasBalance)
+
+	if gasDiff.IsPositive() {
+		oc.alertLowGasBalance(ctx, sdk.NewCoin(oc.minimumGasBalance.Denom, gasDiff))
+		return nil, fmt.Errorf("insufficient gas balance: %s", gasBalance)
+	}
+
 	toFulfillIDs := make([][]string, len(demandOrders)/oc.maxOrdersPerTx+1)
 	batchIdx := 0
 
@@ -155,7 +165,11 @@ outer:
 	for i, order := range demandOrders {
 		// check if the account has enough balance for all price denoms to fulfill the order
 		for _, coin := range order.price {
-			if accountBalances.AmountOf(coin.Denom).LT(coin.Amount) {
+			balanceForDenom := accountBalances.AmountOf(coin.Denom)
+			diff := coin.Amount.Sub(balanceForDenom)
+
+			if diff.IsPositive() { // TODO: configure minimum balance per denom
+				oc.alertLowOrderBalance(ctx, order, sdk.NewCoin(coin.Denom, diff))
 				// if at least one denom is insufficient, skip the order - TODO: can we do partial fulfillment?
 				continue outer
 			}

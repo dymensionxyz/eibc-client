@@ -18,7 +18,6 @@ type orderClient struct {
 	client cosmosclient.Client
 	slack  slacker
 	logger *zap.Logger
-	config Config
 
 	chainID string
 	node    string
@@ -26,14 +25,12 @@ type orderClient struct {
 	domu              sync.Mutex
 	demandOrders      map[string]*demandOrder // id:demandOrder
 	maxOrdersPerTx    int
-	minimumGasBalance string
+	minimumGasBalance sdk.Coin
 	disputePeriod     uint64
+	alertedLowGas     bool
 
 	account     client.Account
 	accountName string
-
-	admu          sync.Mutex
-	alertedDenoms map[string]struct{}
 
 	orderRefreshInterval         time.Duration
 	orderFulfillInterval         time.Duration
@@ -41,7 +38,7 @@ type orderClient struct {
 	disputePeriodRefreshInterval time.Duration
 }
 
-func newOrderClient(config Config) (*orderClient, error) {
+func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	sdkcfg := sdk.GetConfig()
 	sdkcfg.SetBech32PrefixForAccount(hubAddressPrefix, pubKeyPrefix)
 
@@ -50,41 +47,41 @@ func newOrderClient(config Config) (*orderClient, error) {
 		return nil, fmt.Errorf("failed to create logger: %w", err)
 	}
 
+	minimumGasBalance, err := sdk.ParseCoinNormalized(config.MinimumGasBalance)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse minimum gas balance: %w", err)
+	}
+
+	// init cosmos client
+	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(config)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cosmos client: %w", err)
+	}
+
 	oc := &orderClient{
-		// client: nil, set in start()
-		config: config,
+		client: cosmosClient,
 		slack: slacker{
-			Client:    slack.New(config.SlackConfig.BotToken, slack.OptionAppLevelToken(config.SlackConfig.AppToken)),
+			Client:    slack.New(config.SlackConfig.AppToken),
 			channelID: config.SlackConfig.ChannelID,
 			enabled:   config.SlackConfig.Enabled,
 		},
-		accountName:   config.AccountName,
-		demandOrders:  make(map[string]*demandOrder),
-		alertedDenoms: make(map[string]struct{}),
-		logger:        logger,
-		// chainID:               "", set in start()
+		accountName:                  config.AccountName,
+		demandOrders:                 make(map[string]*demandOrder),
+		logger:                       logger,
+		chainID:                      cosmosClient.Context().ChainID,
 		node:                         config.NodeAddress,
-		minimumGasBalance:            config.MinimumGasBalance,
-		maxOrdersPerTx:               defaultMaxOrdersPerTx,
-		orderRefreshInterval:         defaulOrdertRefreshInterval,
-		orderFulfillInterval:         defaultOrderFulfillInterval,
-		orderCleanupInterval:         defaultOrderCleanupInterval,
-		disputePeriodRefreshInterval: defaultDisputePeriodRefreshInterval,
+		minimumGasBalance:            minimumGasBalance,
+		maxOrdersPerTx:               config.MaxOrdersPerTx,
+		orderRefreshInterval:         config.OrderRefreshInterval,
+		orderFulfillInterval:         config.OrderFulfillInterval,
+		orderCleanupInterval:         config.OrderCleanupInterval,
+		disputePeriodRefreshInterval: config.DisputePeriodRefreshInterval,
 	}
 
 	return oc, nil
 }
 
 func (oc *orderClient) start(ctx context.Context) error {
-	// init cosmos client
-	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(oc.config)...)
-	if err != nil {
-		return fmt.Errorf("failed to create cosmos client: %w", err)
-	}
-
-	oc.client = cosmosClient
-	oc.chainID = cosmosClient.Context().ChainID
-
 	// setup account
 	if err := oc.setupAccount(); err != nil {
 		return fmt.Errorf("failed to setup account: %w", err)

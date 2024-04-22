@@ -1,12 +1,16 @@
 keyring_backend: "test"
-account_name: "hub_10d0"
-mnemonic: ""
+home_dir: "/user/home/.order-client"
+account_name: "my-account"
 node_address: "http://localhost:36657"
 chain_id: "dymension_100-1"
-gas_prices: "2000000000adym"
-gas_fees: ""
+gas_prices: "40000000000adym"
+minimum_gas_balance: "40000000000adym"
+max_orders_per_tx: 10
+order_refresh_interval: 35s
+order_fulfill_interval: 6s
+order_cleanup_interval: 2h
+dispute_period_refresh_interval: 5h
 slack:
-  enabled: true
-  bot_token: "your_bot_token"
-  app_token: ""
+  enabled: false
+  app_token: "your-app-token"
   channel_id: "poor-bots"
