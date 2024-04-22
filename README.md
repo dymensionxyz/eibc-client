@@ -1,14 +1,22 @@
 # Order-Client
 
-Order-Client is a bot designed to continuously scan for eIBC demand orders and fulfill them. It operates by periodically searching through the Cosmos client and subscribing to eIBC events.
+Order-Client is a bot designed to continuously scan for eIBC demand orders and fulfill them.
 
 ## Features
 
-- **Order Fulfillment**: The bot is constantly on the lookout for eIBC demand orders. Once an order is detected, the bot fulfills it.
+- **Account Setup**: The bot is configured with a Dymension account that can be found in the local keyring. The account is used to fulfill demand orders.
 
-- **Balance Checks**: The bot periodically checks its balances for the denominations it needs to fulfill orders. If it lacks funds for a particular denomination, it will alert the development team via Slack and skip fulfilling orders for that denomination until its account is topped up.
+- **Order Refresh**: The bot periodically refreshes its demand order list to ensure it has the most up-to-date information. 
+Apart from refreshing the order list, the bot also checks for new orders by subscribing to eIBC events.
 
-- **Gas Payment**: The bot uses DYM coins to pay for gas. If it runs out of DYM coins, it will alert the development team via Slack and pause all order fulfillments until it is topped up.
+- **Order Fulfillment**: The bot fulfills unfulfilled pending demand orders it finds on the hub.
+
+- **Balance Checks**: Every time the bot attempts to fulfill orders it will first check its balances for the denominations it needs to fulfill them.
+If it lacks funds for a particular denomination as specified in the order price, it will send an alert by posting a message on Slack,
+and will skip trying to fulfill that order until its account is topped up.
+
+- **Gas Payment**: The bot uses DYM coins to pay for gas. If it runs out of DYM coins, it will send an alert by posting a message on Slack,
+and will pause all order fulfillments until it is topped up.
 
 - **Order Cleanup**: The bot periodically checks and flushes fulfilled demand orders.
 
