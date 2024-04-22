@@ -1,10 +1,14 @@
 package main
 
 import (
+	"log"
 	"time"
 
 	"github.com/cosmos/cosmos-sdk/client/flags"
+	"github.com/google/uuid"
 	"github.com/ignite/cli/ignite/pkg/cosmosaccount"
+	"github.com/mitchellh/go-homedir"
+	"github.com/spf13/viper"
 
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 )
@@ -18,7 +22,7 @@ type Config struct {
 	ChainID           string `mapstructure:"chain_id"`
 	GasPrices         string `mapstructure:"gas_prices"`
 	GasFees           string `mapstructure:"gas_fees"`
-	MinimumDymBalance string `mapstructure:"minimum_dym_balance"`
+	MinimumGasBalance string `mapstructure:"minimum_gas_balance"`
 
 	SlackConfig slackConfig `mapstructure:"slack"`
 }
@@ -37,17 +41,56 @@ const (
 	hubAddressPrefix         = "dym"
 	pubKeyPrefix             = "pub"
 	defaultGasLimit          = 300000
-	defaultGasPrices         = "2000000000adym"
-	defaultMinimumDymBalance = "40000000000adym"
+	defaultGasDenom          = "adym"
+	defaultGasPrices         = "2000000000" + defaultGasDenom
+	defaultMinimumGasBalance = "40000000000" + defaultGasDenom
 	testKeyringBackend       = "test"
-	defaultMaxOrdersPerTx    = 10
+	defaultMaxOrdersPerTx    = 3
 
-	defaultRefreshInterval       = 30 * time.Second
-	defaultFulfillInterval       = 2 * time.Second
-	defaultCleanupInterval       = 3600 * time.Second
-	defaultDisputePeriodInterval = 10 * time.Hour
-	defaultBalanceCheckInterval  = 30 * time.Second
+	mnemonicEntropySize = 256
+
+	defaulOrdertRefreshInterval         = 30 * time.Second
+	defaultOrderFulfillInterval         = 5 * time.Second
+	defaultOrderCleanupInterval         = 3600 * time.Second
+	defaultDisputePeriodRefreshInterval = 10 * time.Hour
 )
+
+func initConfig() {
+	// Set default values
+	// Find home directory.
+	home, err := homedir.Dir()
+	if err != nil {
+		log.Fatalf("failed to get home directory: %v", err)
+	}
+	defaultHomeDir := home + "/.dymension"
+
+	viper.SetDefault("keyring_backend", testKeyringBackend)
+	viper.SetDefault("keyring_dir", defaultHomeDir)
+	viper.SetDefault("home_dir", defaultHomeDir)
+	viper.SetDefault("node_address", nodeAddress)
+	viper.SetDefault("chain_id", chainID)
+	viper.SetDefault("gas_prices", defaultGasPrices)
+	viper.SetDefault("account_name", "hub_"+uuid.Must(uuid.NewRandom()).String()[:4])
+	viper.SetDefault("slack.enabled", true)
+	viper.SetDefault("slack.channel_id", "poor-bots")
+	viper.SetDefault("minimum_gas_balance", defaultMinimumGasBalance)
+
+	if cfgFile != "" {
+		// Use config file from the flag.
+		viper.SetConfigFile(cfgFile)
+	} else {
+		viper.AddConfigPath(home)
+		viper.AddConfigPath(".")
+		viper.SetConfigName(".order-client")
+	}
+
+	viper.AutomaticEnv() // read in environment variables that match
+
+	// If a config file is found, read it in.
+	if err := viper.ReadInConfig(); err == nil {
+		log.Println("Using config file:", viper.ConfigFileUsed())
+	}
+}
 
 func getCosmosClientOptions(config Config) []cosmosclient.Option {
 	options := []cosmosclient.Option{

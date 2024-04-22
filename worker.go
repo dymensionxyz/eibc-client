@@ -9,7 +9,7 @@ import (
 )
 
 func (oc *orderClient) orderRefresher(ctx context.Context) {
-	go oc.worker(ctx, "orderRefresher", oc.refreshInterval, func() bool {
+	go oc.worker(ctx, "orderRefresher", oc.orderRefreshInterval, func() bool {
 		if err := oc.refreshPendingDemandOrders(ctx); err != nil {
 			oc.logger.Error("failed to refresh demand orders", zap.Error(err))
 		}
@@ -18,26 +18,21 @@ func (oc *orderClient) orderRefresher(ctx context.Context) {
 }
 
 func (oc *orderClient) orderFulfiller(ctx context.Context) {
-	go oc.worker(ctx, "orderFulfiller", oc.fulfillInterval, func() bool {
-		/*if oc.denomSkipped("adym") { // TODO: const
-			oc.logger.Info("DYM balance low, paused order fulfillments")
-			return false
-		}*/
-
-		balance, err := oc.getAccountBalance(ctx, oc.account.GetAddress().String(), "adym")
+	go oc.worker(ctx, "orderFulfiller", oc.orderFulfillInterval, func() bool {
+		balance, err := oc.getAccountBalance(ctx, oc.account.GetAddress().String(), defaultGasDenom)
 		if err != nil {
 			oc.logger.Error("failed to get account balance", zap.Error(err))
 			return false
 		}
 
-		minimumDymBalance, err := sdk.ParseCoinNormalized(oc.minimumDymBalance)
+		minimumGasBalance, err := sdk.ParseCoinNormalized(oc.minimumGasBalance)
 		if err != nil {
-			oc.logger.Error("failed to parse minimum DYM balance", zap.Error(err))
+			oc.logger.Error("failed to parse minimum gas balance", zap.Error(err))
 			return false
 		}
 
-		if balance.IsLT(minimumDymBalance) {
-			oc.logger.Info("DYM balance low, paused order fulfillments")
+		if balance.IsLT(minimumGasBalance) {
+			oc.logger.Debug("gas balance low, paused order fulfillments")
 			return false
 		}
 
@@ -49,7 +44,7 @@ func (oc *orderClient) orderFulfiller(ctx context.Context) {
 }
 
 func (oc *orderClient) orderCleaner(ctx context.Context) {
-	go oc.worker(ctx, "orderCleaner", oc.cleanupInterval, func() bool {
+	go oc.worker(ctx, "orderCleaner", oc.orderCleanupInterval, func() bool {
 		if err := oc.cleanup(); err != nil {
 			oc.logger.Error("failed to cleanup", zap.Error(err))
 		}
@@ -58,7 +53,7 @@ func (oc *orderClient) orderCleaner(ctx context.Context) {
 }
 
 func (oc *orderClient) disputePeriodUpdater(ctx context.Context) {
-	go oc.worker(ctx, "disputePeriodUpdater", oc.disputePeriodInterval, func() bool {
+	go oc.worker(ctx, "disputePeriodUpdater", oc.disputePeriodRefreshInterval, func() bool {
 		disputePeriod, err := oc.getDisputePeriodInBlocks(ctx)
 		if err != nil {
 			oc.logger.Error("failed to get dispute period", zap.Error(err))
@@ -69,16 +64,6 @@ func (oc *orderClient) disputePeriodUpdater(ctx context.Context) {
 			oc.logger.Info("updating dispute period", zap.Uint64("blocks", disputePeriod))
 			oc.disputePeriod = disputePeriod
 		}
-		return false // don't stop me now
-	})
-}
-
-func (oc *orderClient) accountBalanceChecker(ctx context.Context) {
-	go oc.worker(ctx, "accountBalanceChecker", oc.balanceCheckInterval, func() bool {
-		if err := oc.checkBalances(ctx); err != nil {
-			oc.logger.Error("failed to check balances", zap.Error(err))
-		}
-
 		return false // don't stop me now
 	})
 }

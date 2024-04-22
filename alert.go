@@ -54,3 +54,35 @@ func (oc *orderClient) begOnSlack(ctx context.Context, coin sdk.Coin, chainID, n
 	)
 	return respTimestamp, nil
 }
+
+func (oc *orderClient) denomAlerted(denom string) bool {
+	oc.admu.Lock()
+	defer oc.admu.Unlock()
+	_, found := oc.alertedDenoms[denom]
+	return found
+}
+
+func (oc *orderClient) resetAlertDenom(denom string) {
+	oc.admu.Lock()
+	defer oc.admu.Unlock()
+	_, found := oc.alertedDenoms[denom]
+	if !found {
+		return
+	}
+
+	delete(oc.alertedDenoms, denom)
+}
+
+func (oc *orderClient) alertDenom(ctx context.Context, coin sdk.Coin) {
+	if oc.denomAlerted(coin.Denom) {
+		return
+	}
+
+	oc.admu.Lock()
+	defer oc.admu.Unlock()
+	oc.alertedDenoms[coin.Denom] = struct{}{}
+
+	if _, err := oc.begOnSlack(ctx, coin, oc.chainID, oc.node); err != nil {
+		oc.logger.Error("failed to bed on slack", zap.Error(err))
+	}
+}
