@@ -18,7 +18,6 @@ type demandOrder struct {
 	fee               sdk.Coins
 	fulfilledAtHeight uint64
 	alertedLowFunds   bool
-	credited          bool
 }
 
 func (oc *orderClient) GetDemandOrders() map[string]*demandOrder {
@@ -155,7 +154,7 @@ func (oc *orderClient) prepareDemandOrders(ctx context.Context) ([][]string, err
 
 	if gasDiff.IsPositive() {
 		oc.alertLowGasBalance(ctx, sdk.NewCoin(oc.minimumGasBalance.Denom, gasDiff))
-		return nil, fmt.Errorf("insufficient gas balance: %s", gasBalance)
+		return nil, nil // alert once and skip the orders
 	}
 
 	toFulfillIDs := make([][]string, len(demandOrders)/oc.maxOrdersPerTx+1)

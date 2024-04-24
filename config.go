@@ -17,7 +17,6 @@ type Config struct {
 	HomeDir                      string        `mapstructure:"home_dir"`
 	AccountName                  string        `mapstructure:"account_name"`
 	NodeAddress                  string        `mapstructure:"node_address"`
-	ChainID                      string        `mapstructure:"chain_id"`
 	GasPrices                    string        `mapstructure:"gas_prices"`
 	GasFees                      string        `mapstructure:"gas_fees"`
 	MinimumGasBalance            string        `mapstructure:"minimum_gas_balance"`
@@ -39,7 +38,6 @@ type slackConfig struct {
 
 const (
 	defaultNodeAddress       = "http://localhost:36657"
-	defaultChainID           = "dymension_100-1"
 	hubAddressPrefix         = "dym"
 	pubKeyPrefix             = "pub"
 	defaultGasLimit          = 300000
@@ -67,7 +65,6 @@ func initConfig() {
 	viper.SetDefault("keyring_backend", testKeyringBackend)
 	viper.SetDefault("home_dir", defaultHomeDir)
 	viper.SetDefault("node_address", defaultNodeAddress)
-	viper.SetDefault("chain_id", defaultChainID)
 	viper.SetDefault("gas_prices", defaultGasPrices)
 	viper.SetDefault("minimum_gas_balance", defaultMinimumGasBalance)
 	viper.SetDefault("max_orders_per_tx", defaultMaxOrdersPerTx)

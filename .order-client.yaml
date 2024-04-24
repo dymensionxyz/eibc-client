@@ -2,7 +2,6 @@ keyring_backend: "test"
 home_dir: "/user/home/.order-client"
 account_name: "my-account"
 node_address: "http://localhost:36657"
-chain_id: "dymension_100-1"
 gas_prices: "40000000000adym"
 minimum_gas_balance: "40000000000adym"
 max_orders_per_tx: 10

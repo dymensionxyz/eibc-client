@@ -68,6 +68,8 @@ func (oc *orderClient) alertLowOrderBalance(ctx context.Context, order *demandOr
 		return
 	}
 
+	oc.logger.Info("Low balance to fulfill order", zap.String("orderID", order.id), zap.String("balance", coin.String()))
+
 	if _, err := oc.begOnSlack(ctx, order.id, coin, oc.chainID, oc.node); err != nil {
 		oc.logger.Error("failed to bed on slack", zap.Error(err))
 	}
@@ -78,6 +80,8 @@ func (oc *orderClient) alertLowGasBalance(ctx context.Context, coin sdk.Coin) {
 	if oc.alertedLowGas {
 		return
 	}
+
+	oc.logger.Warn("Low gas balance", zap.String("balance", coin.String()))
 
 	if _, err := oc.begOnSlack(ctx, "gas", coin, oc.chainID, oc.node); err != nil {
 		oc.logger.Error("failed to bed on slack", zap.Error(err))

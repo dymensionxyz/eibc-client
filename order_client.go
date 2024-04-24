@@ -52,6 +52,7 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		return nil, fmt.Errorf("failed to parse minimum gas balance: %w", err)
 	}
 
+	logger.Info("Connecting to Cosmos client...")
 	// init cosmos client
 	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(config)...)
 	if err != nil {
@@ -82,11 +83,15 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 }
 
 func (oc *orderClient) start(ctx context.Context) error {
+	oc.logger.Info("starting order client")
+	oc.logger.Info("setting up account")
+
 	// setup account
 	if err := oc.setupAccount(); err != nil {
 		return fmt.Errorf("failed to setup account: %w", err)
 	}
 
+	oc.logger.Info("subscribing to demand orders")
 	// subscribe to demand orders
 	if err := oc.subscribeToPendingDemandOrders(ctx); err != nil {
 		return fmt.Errorf("failed to subscribe to demand orders: %w", err)
