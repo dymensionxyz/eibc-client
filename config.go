@@ -60,7 +60,7 @@ func initConfig() {
 	if err != nil {
 		log.Fatalf("failed to get home directory: %v", err)
 	}
-	defaultHomeDir := home + "/.dymension"
+	defaultHomeDir := home + "/.order-client"
 
 	viper.SetDefault("keyring_backend", testKeyringBackend)
 	viper.SetDefault("home_dir", defaultHomeDir)
@@ -72,21 +72,19 @@ func initConfig() {
 	viper.SetDefault("order_fulfill_interval", defaultOrderFulfillInterval)
 	viper.SetDefault("order_cleanup_interval", defaultOrderCleanupInterval)
 	viper.SetDefault("dispute_period_refresh_interval", defaultDisputePeriodRefreshInterval)
+	viper.SetDefault("slack.enabled", false)
+	viper.SetDefault("slack.app_token", "<your-slack-app-token>")
+	viper.SetDefault("slack.channel_id", "<your-slack-channel-id>")
 
+	viper.SetConfigType("yaml")
 	if cfgFile != "" {
 		// Use config file from the flag.
 		viper.SetConfigFile(cfgFile)
 	} else {
-		viper.AddConfigPath(home)
+		cfgFile = defaultHomeDir + "/config.yaml"
+		viper.AddConfigPath(defaultHomeDir)
 		viper.AddConfigPath(".")
-		viper.SetConfigName(".order-client")
-	}
-
-	viper.AutomaticEnv() // read in environment variables that match
-
-	// If a config file is found, read it in.
-	if err := viper.ReadInConfig(); err == nil {
-		log.Println("Using config file:", viper.ConfigFileUsed())
+		viper.SetConfigName("config")
 	}
 }
 
@@ -100,6 +98,7 @@ func getCosmosClientOptions(config Config) []cosmosclient.Option {
 		cosmosclient.WithGasLimit(defaultGasLimit),
 		cosmosclient.WithGasPrices(config.GasPrices),
 		cosmosclient.WithKeyringBackend(cosmosaccount.KeyringBackend(config.KeyringBackend)),
+		cosmosclient.WithKeyringDir(config.HomeDir),
 	}
 	return options
 }

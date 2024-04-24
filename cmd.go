@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 
 	"github.com/spf13/cobra"
@@ -9,9 +10,48 @@ import (
 
 var rootCmd = &cobra.Command{
 	Use:   "order-client",
-	Short: "Order client for Dymension Hub",
-	Long:  `A client or bot for scanning and fulfilling demand orders found on the Dymension Hub chain.`,
+	Short: "eIBC Order client for Dymension Hub",
+	Long:  `Order client for Dymension Hub that scans for demand orders and fulfills them.`,
 	Run: func(cmd *cobra.Command, args []string) {
+		// If no arguments are provided, print usage information
+		if len(args) == 0 {
+			if err := cmd.Usage(); err != nil {
+				log.Fatalf("Error printing usage: %v", err)
+			}
+		}
+	},
+}
+
+var initCmd = &cobra.Command{
+	Use:   "init",
+	Short: "Initialize the order client",
+	Long:  `Initialize the order client by generating a config file with default values.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		config := Config{}
+		if err := viper.Unmarshal(&config); err != nil {
+			log.Fatalf("failed to unmarshal config: %v", err)
+		}
+		if err := viper.WriteConfigAs(cfgFile); err != nil {
+			log.Fatalf("failed to write config file: %v", err)
+		}
+
+		fmt.Printf("Config file created: %s\n", cfgFile)
+		fmt.Println()
+		fmt.Println("Edit the config file to set the correct values for your environment.")
+	},
+}
+
+var startCmd = &cobra.Command{
+	Use:   "start",
+	Short: "Start the order client",
+	Long:  `Start the order client that scans for demand orders and fulfills them.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		viper.AutomaticEnv()
+
+		if err := viper.ReadInConfig(); err == nil {
+			fmt.Println("Using config file:", viper.ConfigFileUsed())
+		}
+
 		config := Config{}
 		if err := viper.Unmarshal(&config); err != nil {
 			log.Fatalf("failed to unmarshal config: %v", err)
@@ -31,6 +71,10 @@ var rootCmd = &cobra.Command{
 var cfgFile string
 
 func init() {
+	rootCmd.CompletionOptions.DisableDefaultCmd = true
+	rootCmd.AddCommand(initCmd)
+	rootCmd.AddCommand(startCmd)
+
 	cobra.OnInitialize(initConfig)
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file")
