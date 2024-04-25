@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -31,6 +32,14 @@ var initCmd = &cobra.Command{
 		if err := viper.Unmarshal(&config); err != nil {
 			log.Fatalf("failed to unmarshal config: %v", err)
 		}
+
+		// if home dir doesn't exist, create it
+		if _, err := os.Stat(config.HomeDir); os.IsNotExist(err) {
+			if err := os.MkdirAll(config.HomeDir, 0755); err != nil {
+				log.Fatalf("failed to create home directory: %v", err)
+			}
+		}
+
 		if err := viper.WriteConfigAs(cfgFile); err != nil {
 			log.Fatalf("failed to write config file: %v", err)
 		}

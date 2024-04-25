@@ -46,7 +46,7 @@ const (
 	defaultMinimumGasBalance = "40000000000" + defaultGasDenom
 	testKeyringBackend       = "test"
 
-	defaultMaxOrdersPerTx               = 3
+	defaultMaxOrdersPerTx               = 10
 	defaultOrderRefreshInterval         = 30 * time.Second
 	defaultOrderFulfillInterval         = 5 * time.Second
 	defaultOrderCleanupInterval         = 3600 * time.Second
@@ -62,6 +62,7 @@ func initConfig() {
 	}
 	defaultHomeDir := home + "/.order-client"
 
+	viper.SetDefault("account_name", "<your-account-name>")
 	viper.SetDefault("keyring_backend", testKeyringBackend)
 	viper.SetDefault("home_dir", defaultHomeDir)
 	viper.SetDefault("node_address", defaultNodeAddress)
