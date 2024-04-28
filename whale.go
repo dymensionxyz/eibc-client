@@ -72,12 +72,29 @@ func (w *whale) topUp(ctx context.Context, coins sdk.Coins, toAddr string) []str
 		diff := balance.Sub(coin.Amount)
 		if diff.IsPositive() {
 			canTopUp = canTopUp.Add(coin)
+		} else {
+			w.logger.Info(
+				"account doesn't have enough balance",
+				zap.String("denom", coin.Denom),
+				zap.String("balance", balance.String()),
+				zap.String("required", coin.Amount.String()))
 		}
 	}
 
 	if canTopUp.Empty() {
+		w.logger.Info(
+			"no denoms to top up",
+			zap.String("to", toAddr),
+			zap.String("coins", coins.String()))
+
 		return nil
 	}
+
+	w.logger.Debug(
+		"topping up account",
+		zap.String("to", toAddr),
+		zap.String("coins", canTopUp.String()),
+	)
 
 	if err = w.accountSvc.sendCoins(canTopUp, toAddr); err != nil {
 		w.logger.Error("failed to top up account", zap.Error(err))

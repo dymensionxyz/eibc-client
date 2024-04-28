@@ -145,10 +145,14 @@ func buildBot(
 		return nil, fmt.Errorf("failed to create cosmos client for bot: %s;err: %w", name, err)
 	}
 
-	accountSvc, err := newAccountService(cosmosClient, logger, name, minimumGasBalance, topUpCh)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create account service for bot: %s;err: %w", name, err)
-	}
+	accountSvc := newAccountService(
+		cosmosClient,
+		logger,
+		name,
+		minimumGasBalance,
+		topUpCh,
+		withTopUpFactor(config.BotTopUpFactor),
+	)
 
 	fulfiller := newOrderFulfiller(accountSvc, cosmosClient, logger)
 	b := newBot(name, fulfiller, orderCh, failedCh, logger)
@@ -168,10 +172,7 @@ func buildWhale(
 		return nil, fmt.Errorf("failed to create cosmos client for whale: %w", err)
 	}
 
-	accountSvc, err := newAccountService(cosmosClient, logger, config.WhaleAccountName, minimumGasBalance, topUpCh)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create account service for bot: %s;err: %w", config.WhaleAccountName, err)
-	}
+	accountSvc := newAccountService(cosmosClient, logger, config.WhaleAccountName, minimumGasBalance, topUpCh)
 
 	return newWhale(accountSvc, logger, topUpCh), nil
 }

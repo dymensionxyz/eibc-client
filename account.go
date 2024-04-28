@@ -25,7 +25,16 @@ type accountService struct {
 	account           client.Account
 	minimumGasBalance sdk.Coin
 	accountName       string
+	topUpFactor       uint64
 	topUpCh           chan<- topUpRequest
+}
+
+type option func(*accountService)
+
+func withTopUpFactor(topUpFactor uint64) option {
+	return func(s *accountService) {
+		s.topUpFactor = topUpFactor
+	}
 }
 
 func newAccountService(
@@ -34,14 +43,20 @@ func newAccountService(
 	accountName string,
 	minimumGasBalance sdk.Coin,
 	topUpCh chan topUpRequest,
-) (*accountService, error) {
-	return &accountService{
+	options ...option,
+) *accountService {
+	a := &accountService{
 		client:            client,
 		logger:            logger.With(zap.String("module", "account-service")),
 		accountName:       accountName,
 		minimumGasBalance: minimumGasBalance,
 		topUpCh:           topUpCh,
-	}, nil
+	}
+
+	for _, opt := range options {
+		opt(a)
+	}
+	return a
 }
 
 func addAccount(bin, name, homeDir string) (string, error) {
@@ -107,11 +122,11 @@ func createBotAccounts(bin, homeDir string, count int) (names []string, err erro
 
 // TODO: if not found...?
 func (a *accountService) setupAccount() error {
-	account, err := a.client.AccountRegistry.GetByName(a.accountName)
+	acc, err := a.client.AccountRegistry.GetByName(a.accountName)
 	if err != nil {
 		return fmt.Errorf("failed to get account: %w", err)
 	}
-	a.account = mustConvertAccount(account.Record)
+	a.account = mustConvertAccount(acc.Record)
 
 	a.logger.Debug("using account",
 		zap.String("name", a.accountName),
@@ -149,7 +164,7 @@ func (a *accountService) ensureBalances(ctx context.Context, coins sdk.Coins) ([
 		if diff.IsPositive() {
 			// add x times the coin amount to the top up
 			// to avoid frequent top ups
-			coin.Amount = coin.Amount.Add(coin.Amount.MulRaw(topUpFactor))
+			coin.Amount = coin.Amount.MulRaw(int64(a.topUpFactor))
 			toTopUp = toTopUp.Add(coin) // add the whole amount instead of the difference
 		} else {
 			fundedDenoms = append(fundedDenoms, coin.Denom)

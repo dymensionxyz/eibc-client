@@ -14,6 +14,7 @@ import (
 
 type Config struct {
 	WhaleAccountName             string        `mapstructure:"whale_account_name"`
+	BotTopUpFactor               uint64        `mapstructure:"bot_top_up_factor"`
 	KeyringBackend               string        `mapstructure:"keyring_backend"`
 	HomeDir                      string        `mapstructure:"home_dir"`
 	NodeAddress                  string        `mapstructure:"node_address"`
@@ -48,7 +49,7 @@ const (
 
 	botNamePrefix                       = "bot-"
 	whaleAccountName                    = "client"
-	topUpFactor                         = 100
+	defaultBotTopUpFactor               = 2
 	defaultNumberOfBots                 = 1
 	newOrderBufferSize                  = 100
 	defaultMaxOrdersPerTx               = 1
@@ -73,6 +74,7 @@ func initConfig() {
 	viper.SetDefault("gas_prices", defaultGasPrices)
 	viper.SetDefault("minimum_gas_balance", defaultMinimumGasBalance)
 	viper.SetDefault("number_of_bots", defaultNumberOfBots)
+	viper.SetDefault("bot_top_up_factor", defaultBotTopUpFactor)
 	viper.SetDefault("max_orders_per_tx", defaultMaxOrdersPerTx)
 	viper.SetDefault("order_refresh_interval", defaultOrderRefreshInterval)
 	viper.SetDefault("order_cleanup_interval", defaultOrderCleanupInterval)
