@@ -13,18 +13,18 @@ import (
 )
 
 type Config struct {
+	WhaleAccountName             string        `mapstructure:"whale_account_name"`
 	KeyringBackend               string        `mapstructure:"keyring_backend"`
 	HomeDir                      string        `mapstructure:"home_dir"`
-	AccountName                  string        `mapstructure:"account_name"`
 	NodeAddress                  string        `mapstructure:"node_address"`
 	GasPrices                    string        `mapstructure:"gas_prices"`
 	GasFees                      string        `mapstructure:"gas_fees"`
 	MinimumGasBalance            string        `mapstructure:"minimum_gas_balance"`
 	MaxOrdersPerTx               int           `mapstructure:"max_orders_per_tx"`
 	OrderRefreshInterval         time.Duration `mapstructure:"order_refresh_interval"`
-	OrderFulfillInterval         time.Duration `mapstructure:"order_fulfill_interval"`
 	OrderCleanupInterval         time.Duration `mapstructure:"order_cleanup_interval"`
 	DisputePeriodRefreshInterval time.Duration `mapstructure:"dispute_period_refresh_interval"`
+	NumberOfBots                 int           `mapstructure:"number_of_bots"`
 
 	SlackConfig slackConfig `mapstructure:"slack"`
 }
@@ -46,9 +46,13 @@ const (
 	defaultMinimumGasBalance = "40000000000" + defaultGasDenom
 	testKeyringBackend       = "test"
 
-	defaultMaxOrdersPerTx               = 10
+	botNamePrefix                       = "bot-"
+	whaleAccountName                    = "client"
+	topUpFactor                         = 100
+	defaultNumberOfBots                 = 1
+	newOrderBufferSize                  = 100
+	defaultMaxOrdersPerTx               = 1
 	defaultOrderRefreshInterval         = 30 * time.Second
-	defaultOrderFulfillInterval         = 5 * time.Second
 	defaultOrderCleanupInterval         = 3600 * time.Second
 	defaultDisputePeriodRefreshInterval = 10 * time.Hour
 )
@@ -62,15 +66,15 @@ func initConfig() {
 	}
 	defaultHomeDir := home + "/.order-client"
 
-	viper.SetDefault("account_name", "<your-account-name>")
+	viper.SetDefault("whale_account_name", whaleAccountName)
 	viper.SetDefault("keyring_backend", testKeyringBackend)
 	viper.SetDefault("home_dir", defaultHomeDir)
 	viper.SetDefault("node_address", defaultNodeAddress)
 	viper.SetDefault("gas_prices", defaultGasPrices)
 	viper.SetDefault("minimum_gas_balance", defaultMinimumGasBalance)
+	viper.SetDefault("number_of_bots", defaultNumberOfBots)
 	viper.SetDefault("max_orders_per_tx", defaultMaxOrdersPerTx)
 	viper.SetDefault("order_refresh_interval", defaultOrderRefreshInterval)
-	viper.SetDefault("order_fulfill_interval", defaultOrderFulfillInterval)
 	viper.SetDefault("order_cleanup_interval", defaultOrderCleanupInterval)
 	viper.SetDefault("dispute_period_refresh_interval", defaultDisputePeriodRefreshInterval)
 	viper.SetDefault("slack.enabled", false)

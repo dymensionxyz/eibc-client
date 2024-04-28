@@ -3,39 +3,23 @@ package main
 import (
 	"context"
 	"fmt"
-	"sync"
-	"time"
+	"math"
+	"slices"
 
-	"github.com/cosmos/cosmos-sdk/client"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/slack-go/slack"
 	"go.uber.org/zap"
 
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 )
 
 type orderClient struct {
-	client cosmosclient.Client
 	slack  slacker
 	logger *zap.Logger
+	config Config
+	bots   map[string]*bot
+	whale  *whale
 
-	chainID string
-	node    string
-
-	domu              sync.Mutex
-	demandOrders      map[string]*demandOrder // id:demandOrder
-	maxOrdersPerTx    int
-	minimumGasBalance sdk.Coin
-	disputePeriod     uint64
-	alertedLowGas     bool
-
-	account     client.Account
-	accountName string
-
-	orderRefreshInterval         time.Duration
-	orderFulfillInterval         time.Duration
-	orderCleanupInterval         time.Duration
-	disputePeriodRefreshInterval time.Duration
+	orderFetcher *orderFetcher
 }
 
 func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
@@ -47,63 +31,147 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		return nil, fmt.Errorf("failed to create logger: %w", err)
 	}
 
-	minimumGasBalance, err := sdk.ParseCoinNormalized(config.MinimumGasBalance)
+	minGasBalance, err := sdk.ParseCoinNormalized(config.MinimumGasBalance)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse minimum gas balance: %w", err)
 	}
 
-	logger.Info("Connecting to Cosmos client...")
 	// init cosmos client
 	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(config)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cosmos client: %w", err)
 	}
 
+	orderCh := make(chan []*demandOrder, newOrderBufferSize)
+	failedCh := make(chan []string, newOrderBufferSize) // TODO: make buffer size configurable
+	ordFetcher := newOrderFetcher(cosmosClient, config.MaxOrdersPerTx, orderCh, failedCh, logger)
+	topUpCh := make(chan topUpRequest, config.NumberOfBots) // TODO: make buffer size configurable
+	bin := "dymd"                                           // TODO: from config
+
+	accs, err := getBotAccounts(bin, config.HomeDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get bot accounts: %w", err)
+	}
+
+	numFoundBots := len(accs)
+	logger.Info("found local bot accounts", zap.Int("accounts", numFoundBots))
+
+	botsAccountsToCreate := int(math.Max(0, float64(config.NumberOfBots)-float64(numFoundBots)))
+	newNames, err := createBotAccounts(bin, config.HomeDir, botsAccountsToCreate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create bot accounts: %w", err)
+	}
+
+	accs = slices.Concat(accs, newNames)
+
+	if len(accs) < config.NumberOfBots {
+		return nil, fmt.Errorf("expected %d bot accounts, got %d", config.NumberOfBots, len(accs))
+	}
+
+	// create bots
+	bots := make(map[string]*bot)
+	for i := range config.NumberOfBots {
+		b, err := buildBot(ctx, accs[i], logger, config, minGasBalance, orderCh, failedCh, topUpCh)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create bot: %w", err)
+		}
+		bots[b.name] = b
+	}
+
+	whaleSvc, err := buildWhale(ctx, logger, config, minGasBalance, topUpCh)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create whale: %w", err)
+	}
+
 	oc := &orderClient{
-		client: cosmosClient,
-		slack: slacker{
+		/*slack: slacker{
 			Client:    slack.New(config.SlackConfig.AppToken),
 			channelID: config.SlackConfig.ChannelID,
 			enabled:   config.SlackConfig.Enabled,
-		},
-		accountName:                  config.AccountName,
-		demandOrders:                 make(map[string]*demandOrder),
-		logger:                       logger,
-		chainID:                      cosmosClient.Context().ChainID,
-		node:                         config.NodeAddress,
-		minimumGasBalance:            minimumGasBalance,
-		maxOrdersPerTx:               config.MaxOrdersPerTx,
-		orderRefreshInterval:         config.OrderRefreshInterval,
-		orderFulfillInterval:         config.OrderFulfillInterval,
-		orderCleanupInterval:         config.OrderCleanupInterval,
-		disputePeriodRefreshInterval: config.DisputePeriodRefreshInterval,
+		},*/
+		orderFetcher: ordFetcher,
+		bots:         bots,
+		whale:        whaleSvc,
+		config:       config,
+		logger:       logger,
 	}
 
 	return oc, nil
 }
 
 func (oc *orderClient) start(ctx context.Context) error {
-	oc.logger.Info("starting order client")
-	oc.logger.Info("setting up account")
+	oc.logger.Info("starting demand order fetcher...")
 
-	// setup account
-	if err := oc.setupAccount(); err != nil {
-		return fmt.Errorf("failed to setup account: %w", err)
-	}
-
-	oc.logger.Info("subscribing to demand orders")
-	// subscribe to demand orders
-	if err := oc.subscribeToPendingDemandOrders(ctx); err != nil {
+	// start order fetcher
+	if err := oc.orderFetcher.start(ctx, oc.config.OrderRefreshInterval); err != nil {
 		return fmt.Errorf("failed to subscribe to demand orders: %w", err)
 	}
 
-	// start workers
-	oc.orderRefresher(ctx)
-	oc.orderFulfiller(ctx)
-	oc.orderCleaner(ctx)
-	oc.disputePeriodUpdater(ctx)
+	// start whale service
+	if err := oc.whale.start(ctx); err != nil {
+		return fmt.Errorf("failed to start whale service: %w", err)
+	}
+	//	oc.disputePeriodUpdater(ctx)
+
+	oc.logger.Info("starting bots...")
+	// start bots
+	for _, b := range oc.bots {
+		go func() {
+			if err := b.start(ctx); err != nil {
+				oc.logger.Error("failed to bot", zap.Error(err))
+			}
+		}()
+	}
 
 	make(chan struct{}) <- struct{}{} // TODO: make nicer
 
 	return nil
+}
+
+// add command that creates all the bots to be used?
+
+func buildBot(
+	ctx context.Context,
+	name string,
+	logger *zap.Logger,
+	config Config,
+	minimumGasBalance sdk.Coin,
+	orderCh chan []*demandOrder,
+	failedCh chan []string,
+	topUpCh chan topUpRequest,
+) (*bot, error) {
+	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(config)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cosmos client for bot: %s;err: %w", name, err)
+	}
+
+	accountSvc, err := newAccountService(cosmosClient, logger, name, minimumGasBalance, topUpCh)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create account service for bot: %s;err: %w", name, err)
+	}
+
+	fulfiller := newOrderFulfiller(accountSvc, cosmosClient, logger)
+	b := newBot(name, fulfiller, orderCh, failedCh, logger)
+
+	return b, nil
+}
+
+func buildWhale(
+	ctx context.Context,
+	logger *zap.Logger,
+	config Config,
+	minimumGasBalance sdk.Coin,
+	topUpCh chan topUpRequest,
+) (*whale, error) {
+	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(config)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cosmos client for whale: %w", err)
+	}
+
+	accountSvc, err := newAccountService(cosmosClient, logger, config.WhaleAccountName, minimumGasBalance, topUpCh)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create account service for bot: %s;err: %w", config.WhaleAccountName, err)
+	}
+
+	return newWhale(accountSvc, logger, topUpCh), nil
 }

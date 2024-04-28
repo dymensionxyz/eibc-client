@@ -14,15 +14,16 @@ type slacker struct {
 	*slack.Client // TODO: abstract this out
 	channelID     string
 	enabled       bool
+	alertedLowGas bool // TODO: no good - just a placeholder
+	logger        *zap.Logger
 }
 
-func (oc *orderClient) begOnSlack(ctx context.Context, orderID string, coin sdk.Coin, chainID, node string) (string, error) {
-	if !oc.slack.enabled {
+func (oc *slacker) begOnSlack(ctx context.Context, orderID, address string, coin sdk.Coin, chainID, node string) (string, error) {
+	if !oc.enabled {
 		oc.logger.Debug("Slack is disabled")
 		return "", nil
 	}
 
-	address := oc.account.GetAddress().String()
 	oc.logger.With(
 		zap.String("orderID", orderID),
 		zap.String("denom", coin.Denom),
@@ -38,9 +39,9 @@ func (oc *orderClient) begOnSlack(ctx context.Context, orderID string, coin sdk.
 			coin.String(), address, chainID, node)
 	}
 
-	respChannel, respTimestamp, err := oc.slack.PostMessageContext(
+	respChannel, respTimestamp, err := oc.PostMessageContext(
 		ctx,
-		oc.slack.channelID,
+		oc.channelID,
 		slack.MsgOptionText(message, false),
 	)
 	if err != nil {
@@ -54,15 +55,15 @@ func (oc *orderClient) begOnSlack(ctx context.Context, orderID string, coin sdk.
 
 	time.Sleep(time.Second * 5)
 
-	_, _, _ = oc.slack.PostMessageContext(
+	_, _, _ = oc.PostMessageContext(
 		ctx,
-		oc.slack.channelID,
+		oc.channelID,
 		slack.MsgOptionText("I can wait...", false),
 	)
 	return respTimestamp, nil
 }
 
-func (oc *orderClient) alertLowOrderBalance(ctx context.Context, order *demandOrder, coin sdk.Coin) {
+func (oc *slacker) alertLowOrderBalance(ctx context.Context, address, chainID, node string, order *demandOrder, coin sdk.Coin) {
 	// this is lost after a restart
 	if order.alertedLowFunds {
 		return
@@ -70,20 +71,20 @@ func (oc *orderClient) alertLowOrderBalance(ctx context.Context, order *demandOr
 
 	oc.logger.Info("Low balance to fulfill order", zap.String("orderID", order.id), zap.String("balance", coin.String()))
 
-	if _, err := oc.begOnSlack(ctx, order.id, coin, oc.chainID, oc.node); err != nil {
+	if _, err := oc.begOnSlack(ctx, order.id, address, coin, chainID, node); err != nil {
 		oc.logger.Error("failed to bed on slack", zap.Error(err))
 	}
 	order.alertedLowFunds = true
 }
 
-func (oc *orderClient) alertLowGasBalance(ctx context.Context, coin sdk.Coin) {
+func (oc *slacker) alertLowGasBalance(ctx context.Context, address, chainID, node string, coin sdk.Coin) {
 	if oc.alertedLowGas {
 		return
 	}
 
 	oc.logger.Warn("Low gas balance", zap.String("balance", coin.String()))
 
-	if _, err := oc.begOnSlack(ctx, "gas", coin, oc.chainID, oc.node); err != nil {
+	if _, err := oc.begOnSlack(ctx, "gas", address, coin, chainID, node); err != nil {
 		oc.logger.Error("failed to bed on slack", zap.Error(err))
 	}
 	oc.alertedLowGas = true
