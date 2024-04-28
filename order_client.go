@@ -103,7 +103,7 @@ func (oc *orderClient) start(ctx context.Context) error {
 	oc.logger.Info("starting demand order fetcher...")
 
 	// start order fetcher
-	if err := oc.orderFetcher.start(ctx, oc.config.OrderRefreshInterval); err != nil {
+	if err := oc.orderFetcher.start(ctx, oc.config.OrderRefreshInterval, oc.config.OrderCleanupInterval); err != nil {
 		return fmt.Errorf("failed to subscribe to demand orders: %w", err)
 	}
 
