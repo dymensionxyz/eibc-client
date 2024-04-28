@@ -15,7 +15,6 @@ import (
 type Config struct {
 	KeyringBackend               string        `mapstructure:"keyring_backend"`
 	HomeDir                      string        `mapstructure:"home_dir"`
-	AccountName                  string        `mapstructure:"account_name"`
 	NodeAddress                  string        `mapstructure:"node_address"`
 	GasPrices                    string        `mapstructure:"gas_prices"`
 	GasFees                      string        `mapstructure:"gas_fees"`
@@ -25,6 +24,7 @@ type Config struct {
 	OrderFulfillInterval         time.Duration `mapstructure:"order_fulfill_interval"`
 	OrderCleanupInterval         time.Duration `mapstructure:"order_cleanup_interval"`
 	DisputePeriodRefreshInterval time.Duration `mapstructure:"dispute_period_refresh_interval"`
+	NumberOfBots                 int           `mapstructure:"number_of_bots"`
 
 	SlackConfig slackConfig `mapstructure:"slack"`
 }
@@ -46,6 +46,10 @@ const (
 	defaultMinimumGasBalance = "40000000000" + defaultGasDenom
 	testKeyringBackend       = "test"
 
+	botNamePrefix                       = "bot-"
+	whaleAccountName                    = "client"
+	defaultNumberOfBots                 = 1
+	newOrderBufferSize                  = 100
 	defaultMaxOrdersPerTx               = 10
 	defaultOrderRefreshInterval         = 30 * time.Second
 	defaultOrderFulfillInterval         = 5 * time.Second
@@ -68,6 +72,7 @@ func initConfig() {
 	viper.SetDefault("node_address", defaultNodeAddress)
 	viper.SetDefault("gas_prices", defaultGasPrices)
 	viper.SetDefault("minimum_gas_balance", defaultMinimumGasBalance)
+	viper.SetDefault("number_of_bots", defaultNumberOfBots)
 	viper.SetDefault("max_orders_per_tx", defaultMaxOrdersPerTx)
 	viper.SetDefault("order_refresh_interval", defaultOrderRefreshInterval)
 	viper.SetDefault("order_fulfill_interval", defaultOrderFulfillInterval)
