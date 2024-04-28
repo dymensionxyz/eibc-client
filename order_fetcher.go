@@ -43,13 +43,13 @@ func newOrderFetcher(
 	}
 }
 
-func (of *orderFetcher) start(ctx context.Context, refreshInterval time.Duration) error {
+func (of *orderFetcher) start(ctx context.Context, refreshInterval, cleanupInterval time.Duration) error {
 	if err := of.subscribeToPendingDemandOrders(ctx); err != nil {
 		return fmt.Errorf("failed to subscribe to pending demand orders: %w", err)
 	}
 
 	of.orderRefresher(ctx, refreshInterval)
-	of.orderCleaner(ctx, refreshInterval) // TODO: check how many blocks the order is old
+	of.orderCleaner(ctx, cleanupInterval) // TODO: check how many blocks the order is old
 	of.doneOrders(ctx)
 
 	return nil
