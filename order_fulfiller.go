@@ -26,14 +26,14 @@ func newOrderFulfiller(accountSvc *accountService, client cosmosclient.Client, l
 	return &orderFulfiller{
 		accountSvc: accountSvc,
 		client:     client,
-		logger:     logger.With(zap.String("module", "order-fulfiller")),
+		logger:     logger.With(zap.String("module", "order-fulfiller"), zap.String("name", accountSvc.accountName)),
 	}
 }
 
 func (ol *orderFulfiller) fulfillOrders(
 	ctx context.Context,
 	toFulfillOrders chan []*demandOrder,
-	fulfilledOrderIDs chan<- []string,
+	failedOrderIDs chan<- []string,
 ) {
 	for {
 		select {
@@ -76,11 +76,10 @@ func (ol *orderFulfiller) fulfillOrders(
 			ol.logger.Info("fulfilling orders", zap.Int("count", len(ids)))
 
 			if err := ol.fulfillDemandOrders(ids...); err != nil {
-				ol.logger.Error("failed to fulfill orders", zap.Error(err))
+				ol.logger.Error("failed to fulfill orders", zap.Error(err), zap.Strings("ids", ids))
+				failedOrderIDs <- ids
 				continue
 			}
-
-			fulfilledOrderIDs <- ids
 
 			// mark the orders as fulfilled
 			/*for _, id := range ids {
@@ -88,7 +87,7 @@ func (ol *orderFulfiller) fulfillOrders(
 				if err != nil {
 					return fmt.Errorf("failed to get latest height: %w", err)
 				}
-				ol.fulfilledOrders[id].fulfilledAtHeight = uint64(latestHeight)
+				ol.demandOrders[id].fulfilledAtHeight = uint64(latestHeight)
 			}*/
 		}
 	}

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"slices"
 	"sync"
 	"time"
 
@@ -20,27 +19,27 @@ type orderFetcher struct {
 	client cosmosclient.Client
 	logger *zap.Logger
 
-	batchSize       int
-	domu            sync.Mutex
-	newOrders       chan []*demandOrder
-	doneCh          chan []string
-	fulfilledOrders map[string]struct{}
+	batchSize      int
+	domu           sync.Mutex
+	newOrders      chan []*demandOrder
+	failedOrdersCh chan []string
+	demandOrders   map[string]struct{}
 }
 
 func newOrderFetcher(
 	client cosmosclient.Client,
 	batchSize int,
 	newOrders chan []*demandOrder,
-	doneCh chan []string,
+	failedOrdersCh chan []string,
 	logger *zap.Logger,
 ) *orderFetcher {
 	return &orderFetcher{
-		client:          client,
-		batchSize:       batchSize,
-		logger:          logger.With(zap.String("module", "order-fetcher")),
-		newOrders:       newOrders,
-		doneCh:          doneCh,
-		fulfilledOrders: make(map[string]struct{}),
+		client:         client,
+		batchSize:      batchSize,
+		logger:         logger.With(zap.String("module", "order-fetcher")),
+		newOrders:      newOrders,
+		failedOrdersCh: failedOrdersCh,
+		demandOrders:   make(map[string]struct{}),
 	}
 }
 
@@ -50,7 +49,7 @@ func (of *orderFetcher) start(ctx context.Context, refreshInterval time.Duration
 	}
 
 	of.orderRefresher(ctx, refreshInterval)
-	of.orderCleaner(ctx, refreshInterval)
+	of.orderCleaner(ctx, refreshInterval) // TODO: check how many blocks the order is old
 	of.doneOrders(ctx)
 
 	return nil
@@ -62,19 +61,19 @@ func (of *orderFetcher) doneOrders(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case ids := <-of.doneCh:
-				of.setFulfilledOrders(ids)
+			case ids := <-of.failedOrdersCh:
+				of.deleteFailedOrder(ids)
 			}
 		}
 	}()
 }
 
-func (of *orderFetcher) setFulfilledOrders(ids []string) {
+func (of *orderFetcher) deleteFailedOrder(ids []string) {
 	of.domu.Lock()
 	defer of.domu.Unlock()
 
 	for _, id := range ids {
-		of.fulfilledOrders[id] = struct{}{}
+		delete(of.demandOrders, id)
 	}
 }
 
@@ -88,10 +87,17 @@ func (of *orderFetcher) refreshPendingDemandOrders(ctx context.Context) error {
 
 	unfulfilledOrders := make([]*demandOrder, 0, len(res))
 
+	// TODO: maybe check here which denoms the whale can provide funds for
+
 	of.domu.Lock()
 	for _, d := range res {
-		if _, found := of.fulfilledOrders[d.Id]; found || d.IsFullfilled {
+		// if already in the map, means fulfilled or fulfilling
+		if _, found := of.demandOrders[d.Id]; found || d.IsFullfilled {
+			of.logger.Debug("skipping fulfilled order", zap.String("id", d.Id))
 			continue
+		} else {
+			// otherwise, save to prevent duplicates
+			of.demandOrders[d.Id] = struct{}{}
 		}
 		order := &demandOrder{
 			id:    d.Id,
@@ -125,28 +131,27 @@ func (of *orderFetcher) enqueueEventOrders(res tmtypes.ResultEvent) {
 		return
 	}
 
-	// exclude ones that are already fulfilled
-	of.domu.Lock()
-	ids = slices.DeleteFunc[[]string](ids, func(id string) bool {
-		_, found := of.fulfilledOrders[id]
-		return found
-	})
-	of.domu.Unlock()
-
-	of.logger.Info("received new demand orders", zap.Int("count", len(ids)))
-
 	// packetKeys := res.Events["eibc.packet_key"]
 	prices := res.Events["eibc.price"]
 	fees := res.Events["eibc.fee"]
 	statuses := res.Events["eibc.packet_status"]
 	// recipients := res.Events["transfer.recipient"]
+	unfulfilledOrders := make([]*demandOrder, 0, len(ids))
 
-	batch := make([]*demandOrder, 0, len(ids))
-
+	of.domu.Lock()
 	for i, id := range ids {
 		if statuses[i] != types.Status_PENDING.String() {
 			continue
 		}
+
+		// exclude ones that are already fulfilled or fulfilling
+		if _, found := of.demandOrders[id]; found {
+			continue
+		} else {
+			// otherwise, save to prevent duplicates
+			of.demandOrders[id] = struct{}{}
+		}
+
 		price, err := sdk.ParseCoinNormalized(prices[i])
 		if err != nil {
 			of.logger.Error("failed to parse price", zap.Error(err))
@@ -162,11 +167,22 @@ func (of *orderFetcher) enqueueEventOrders(res tmtypes.ResultEvent) {
 			price: sdk.NewCoins(price),
 			fee:   sdk.NewCoins(fee),
 		}
-
-		batch = append(batch, order)
+		unfulfilledOrders = append(unfulfilledOrders, order)
 	}
+	of.domu.Unlock()
 
-	of.newOrders <- batch
+	of.logger.Info("new demand orders", zap.Int("count", len(unfulfilledOrders)))
+
+	batch := make([]*demandOrder, 0, of.batchSize)
+
+	for _, order := range unfulfilledOrders {
+		batch = append(batch, order)
+
+		if len(batch) >= of.batchSize || len(batch) == len(unfulfilledOrders) {
+			of.newOrders <- batch
+			batch = make([]*demandOrder, 0, of.batchSize)
+		}
+	}
 }
 
 func (of *orderFetcher) getDemandOrdersByStatus(ctx context.Context, status string) ([]*eibctypes.DemandOrder, error) {
@@ -208,11 +224,11 @@ func (of *orderFetcher) subscribeToPendingDemandOrders(ctx context.Context) erro
 
 func (of *orderFetcher) orderRefresher(ctx context.Context, refreshInterval time.Duration) {
 	go func() {
-		for {
+		for c := time.Tick(refreshInterval); ; <-c {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(refreshInterval):
+			default:
 				if err := of.refreshPendingDemandOrders(ctx); err != nil {
 					of.logger.Error("failed to refresh demand orders", zap.Error(err))
 				}
@@ -242,10 +258,10 @@ func (of *orderFetcher) cleanup() error {
 
 	cleanupCount := 0
 
-	for id, _ := range of.fulfilledOrders {
+	for id, _ := range of.demandOrders {
 		// TODO: check if credited
 		// cleanup fulfilled and credited demand orders
-		delete(of.fulfilledOrders, id)
+		delete(of.demandOrders, id)
 		cleanupCount++
 	}
 

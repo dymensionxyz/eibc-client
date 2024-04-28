@@ -43,8 +43,8 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	}
 
 	orderCh := make(chan []*demandOrder, newOrderBufferSize)
-	doneCh := make(chan []string, newOrderBufferSize) // TODO: make buffer size configurable
-	ordFetcher := newOrderFetcher(cosmosClient, config.MaxOrdersPerTx, orderCh, doneCh, logger)
+	failedCh := make(chan []string, newOrderBufferSize) // TODO: make buffer size configurable
+	ordFetcher := newOrderFetcher(cosmosClient, config.MaxOrdersPerTx, orderCh, failedCh, logger)
 	topUpCh := make(chan topUpRequest, config.NumberOfBots) // TODO: make buffer size configurable
 	bin := "dymd"                                           // TODO: from config
 
@@ -71,7 +71,7 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	// create bots
 	bots := make(map[string]*bot)
 	for i := range config.NumberOfBots {
-		b, err := buildBot(ctx, accs[i], logger, config, minGasBalance, orderCh, doneCh, topUpCh)
+		b, err := buildBot(ctx, accs[i], logger, config, minGasBalance, orderCh, failedCh, topUpCh)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create bot: %w", err)
 		}
@@ -108,9 +108,12 @@ func (oc *orderClient) start(ctx context.Context) error {
 	}
 
 	// start whale service
-	oc.whale.start(ctx)
+	if err := oc.whale.start(ctx); err != nil {
+		return fmt.Errorf("failed to start whale service: %w", err)
+	}
 	//	oc.disputePeriodUpdater(ctx)
 
+	oc.logger.Info("starting bots...")
 	// start bots
 	for _, b := range oc.bots {
 		go func() {
@@ -134,7 +137,7 @@ func buildBot(
 	config Config,
 	minimumGasBalance sdk.Coin,
 	orderCh chan []*demandOrder,
-	doneCh chan []string,
+	failedCh chan []string,
 	topUpCh chan topUpRequest,
 ) (*bot, error) {
 	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(config)...)
@@ -148,7 +151,7 @@ func buildBot(
 	}
 
 	fulfiller := newOrderFulfiller(accountSvc, cosmosClient, logger)
-	b := newBot(name, fulfiller, orderCh, doneCh, logger)
+	b := newBot(name, fulfiller, orderCh, failedCh, logger)
 
 	return b, nil
 }
@@ -165,9 +168,9 @@ func buildWhale(
 		return nil, fmt.Errorf("failed to create cosmos client for whale: %w", err)
 	}
 
-	accountSvc, err := newAccountService(cosmosClient, logger, whaleAccountName, minimumGasBalance, topUpCh)
+	accountSvc, err := newAccountService(cosmosClient, logger, config.WhaleAccountName, minimumGasBalance, topUpCh)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create account service for bot: %s;err: %w", whaleAccountName, err)
+		return nil, fmt.Errorf("failed to create account service for bot: %s;err: %w", config.WhaleAccountName, err)
 	}
 
 	return newWhale(accountSvc, logger, topUpCh), nil

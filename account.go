@@ -113,7 +113,7 @@ func (a *accountService) setupAccount() error {
 	}
 	a.account = mustConvertAccount(account.Record)
 
-	a.logger.Info("using account",
+	a.logger.Debug("using account",
 		zap.String("name", a.accountName),
 		zap.String("pub key", a.account.GetPubKey().String()),
 		zap.String("address", a.account.GetAddress().String()),
@@ -147,6 +147,9 @@ func (a *accountService) ensureBalances(ctx context.Context, coins sdk.Coins) ([
 		balance := accountBalances.AmountOf(coin.Denom)
 		diff := coin.Amount.Sub(balance)
 		if diff.IsPositive() {
+			// add x times the coin amount to the top up
+			// to avoid frequent top ups
+			coin.Amount = coin.Amount.Add(coin.Amount.MulRaw(topUpFactor))
 			toTopUp = toTopUp.Add(coin) // add the whole amount instead of the difference
 		} else {
 			fundedDenoms = append(fundedDenoms, coin.Denom)

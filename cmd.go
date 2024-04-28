@@ -66,6 +66,8 @@ var startCmd = &cobra.Command{
 			log.Fatalf("failed to unmarshal config: %v", err)
 		}
 
+		log.Printf("using config file: %+v", viper.ConfigFileUsed())
+
 		oc, err := newOrderClient(cmd.Context(), config)
 		if err != nil {
 			log.Fatalf("failed to create order client: %v", err)

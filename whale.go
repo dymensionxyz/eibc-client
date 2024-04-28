@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"go.uber.org/zap"
@@ -27,12 +28,23 @@ func newWhale(accountSvc *accountService, logger *zap.Logger, topUpCh <-chan top
 	}
 }
 
-func (w *whale) start(ctx context.Context) {
+func (w *whale) start(ctx context.Context) error {
 	if err := w.accountSvc.setupAccount(); err != nil {
-		w.logger.Error("failed to setup account", zap.Error(err))
-		return
+		return fmt.Errorf("failed to setup account: %w", err)
 	}
+
+	balances, err := w.accountSvc.getAccountBalances(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get account balances: %w", err)
+	}
+
+	w.logger.Info("starting service...",
+		zap.String("account", w.accountSvc.accountName),
+		zap.String("address", w.accountSvc.account.GetAddress().String()),
+		zap.String("balances", balances.String()))
+
 	go w.topUpBalances(ctx)
+	return nil
 }
 
 func (w *whale) topUpBalances(ctx context.Context) {
