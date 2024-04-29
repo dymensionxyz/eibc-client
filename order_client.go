@@ -58,7 +58,7 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	topUpCh := make(chan topUpRequest, config.Bots.NumberOfBots) // TODO: make buffer size configurable
 	bin := "dymd"                                                // TODO: from config
 
-	accs, err := getBotAccounts(bin, config.HomeDir)
+	accs, err := getBotAccounts(bin, config.Bots.KeyringDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get bot accounts: %w", err)
 	}
