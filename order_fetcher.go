@@ -93,7 +93,6 @@ func (of *orderFetcher) refreshPendingDemandOrders(ctx context.Context) error {
 	for _, d := range res {
 		// if already in the map, means fulfilled or fulfilling
 		if _, found := of.demandOrders[d.Id]; found || d.IsFullfilled {
-			of.logger.Debug("skipping fulfilled order", zap.String("id", d.Id))
 			continue
 		} else {
 			// otherwise, save to prevent duplicates

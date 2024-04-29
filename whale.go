@@ -3,15 +3,21 @@ package main
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"go.uber.org/zap"
 )
 
 type whale struct {
-	accountSvc *accountService
-	logger     *zap.Logger
-	topUpCh    <-chan topUpRequest
+	accountSvc    *accountService
+	logger        *zap.Logger
+	topUpCh       <-chan topUpRequest
+	allowedDenoms map[string]struct{}
+	admu          sync.Mutex
+	alertedDenoms map[string]struct{}
+	slack         *slacker
+	chainID, node string
 }
 
 type topUpRequest struct {
@@ -20,11 +26,27 @@ type topUpRequest struct {
 	res    chan []string
 }
 
-func newWhale(accountSvc *accountService, logger *zap.Logger, topUpCh <-chan topUpRequest) *whale {
+func newWhale(
+	accountSvc *accountService,
+	allowedDenoms []string,
+	logger *zap.Logger,
+	slack *slacker,
+	chainID, node string,
+	topUpCh <-chan topUpRequest,
+) *whale {
+	allowedDenomsMap := make(map[string]struct{}, len(allowedDenoms))
+	for _, denom := range allowedDenoms {
+		allowedDenomsMap[denom] = struct{}{}
+	}
 	return &whale{
-		accountSvc: accountSvc,
-		logger:     logger.With(zap.String("module", "whale")),
-		topUpCh:    topUpCh,
+		accountSvc:    accountSvc,
+		logger:        logger.With(zap.String("module", "whale")),
+		topUpCh:       topUpCh,
+		slack:         slack,
+		allowedDenoms: allowedDenomsMap,
+		alertedDenoms: make(map[string]struct{}),
+		chainID:       chainID,
+		node:          node,
 	}
 }
 
@@ -68,21 +90,22 @@ func (w *whale) topUp(ctx context.Context, coins sdk.Coins, toAddr string) []str
 
 	canTopUp := sdk.NewCoins()
 	for _, coin := range coins {
+		if len(w.allowedDenoms) > 0 {
+			if _, ok := w.allowedDenoms[coin.Denom]; !ok {
+				continue
+			}
+		}
 		balance := whaleBalances.AmountOf(coin.Denom)
 		diff := balance.Sub(coin.Amount)
 		if diff.IsPositive() {
 			canTopUp = canTopUp.Add(coin)
 		} else {
-			w.logger.Info(
-				"account doesn't have enough balance",
-				zap.String("denom", coin.Denom),
-				zap.String("balance", balance.String()),
-				zap.String("required", coin.Amount.String()))
+			go w.alertLowBalance(ctx, coin, sdk.NewCoin(coin.Denom, balance))
 		}
 	}
 
 	if canTopUp.Empty() {
-		w.logger.Info(
+		w.logger.Debug(
 			"no denoms to top up",
 			zap.String("to", toAddr),
 			zap.String("coins", coins.String()))
@@ -107,4 +130,31 @@ func (w *whale) topUp(ctx context.Context, coins sdk.Coins, toAddr string) []str
 	}
 
 	return toppedUp
+}
+
+func (w *whale) alertLowBalance(ctx context.Context, coin, balance sdk.Coin) {
+	w.admu.Lock()
+	defer w.admu.Unlock()
+
+	if _, ok := w.alertedDenoms[coin.Denom]; ok {
+		return
+	}
+	w.alertedDenoms[coin.Denom] = struct{}{}
+
+	w.logger.Warn(
+		"account doesn't have enough balance",
+		zap.String("balance", balance.String()),
+		zap.String("required", coin.String()))
+
+	_, err := w.slack.begOnSlack(
+		ctx,
+		w.accountSvc.account.GetAddress().String(),
+		coin,
+		balance,
+		w.chainID,
+		w.node,
+	)
+	if err != nil {
+		w.logger.Error("failed to beg on slack", zap.Error(err))
+	}
 }

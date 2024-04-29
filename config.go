@@ -13,21 +13,35 @@ import (
 )
 
 type Config struct {
-	WhaleAccountName             string        `mapstructure:"whale_account_name"`
-	BotTopUpFactor               uint64        `mapstructure:"bot_top_up_factor"`
-	KeyringBackend               string        `mapstructure:"keyring_backend"`
 	HomeDir                      string        `mapstructure:"home_dir"`
 	NodeAddress                  string        `mapstructure:"node_address"`
 	GasPrices                    string        `mapstructure:"gas_prices"`
 	GasFees                      string        `mapstructure:"gas_fees"`
 	MinimumGasBalance            string        `mapstructure:"minimum_gas_balance"`
-	MaxOrdersPerTx               int           `mapstructure:"max_orders_per_tx"`
 	OrderRefreshInterval         time.Duration `mapstructure:"order_refresh_interval"`
 	OrderCleanupInterval         time.Duration `mapstructure:"order_cleanup_interval"`
 	DisputePeriodRefreshInterval time.Duration `mapstructure:"dispute_period_refresh_interval"`
-	NumberOfBots                 int           `mapstructure:"number_of_bots"`
 
+	Whale whaleConfig `mapstructure:"whale"`
+	Bots  botConfig   `mapstructure:"bots"`
+
+	LogLevel    string      `mapstructure:"log_level"`
 	SlackConfig slackConfig `mapstructure:"slack"`
+}
+
+type botConfig struct {
+	NumberOfBots   int                          `mapstructure:"number_of_bots"`
+	KeyringBackend cosmosaccount.KeyringBackend `mapstructure:"keyring_backend"`
+	KeyringDir     string                       `mapstructure:"keyring_dir"`
+	TopUpFactor    uint64                       `mapstructure:"top_up_factor"`
+	MaxOrdersPerTx int                          `mapstructure:"max_orders_per_tx"`
+}
+
+type whaleConfig struct {
+	AccountName    string                       `mapstructure:"account_name"`
+	KeyringBackend cosmosaccount.KeyringBackend `mapstructure:"keyring_backend"`
+	KeyringDir     string                       `mapstructure:"keyring_dir"`
+	AllowedDenoms  []string                     `mapstructure:"allowed_denoms"`
 }
 
 type slackConfig struct {
@@ -41,6 +55,7 @@ const (
 	defaultNodeAddress       = "http://localhost:36657"
 	hubAddressPrefix         = "dym"
 	pubKeyPrefix             = "pub"
+	defaultLogLevel          = "info"
 	defaultGasLimit          = 300000
 	defaultGasDenom          = "adym"
 	defaultGasPrices         = "2000000000" + defaultGasDenom
@@ -67,14 +82,19 @@ func initConfig() {
 	}
 	defaultHomeDir := home + "/.order-client"
 
-	viper.SetDefault("whale_account_name", whaleAccountName)
-	viper.SetDefault("keyring_backend", testKeyringBackend)
 	viper.SetDefault("home_dir", defaultHomeDir)
+	viper.SetDefault("log_level", defaultLogLevel)
+	viper.SetDefault("whale.account_name", whaleAccountName)
+	viper.SetDefault("whale.keyring_backend", testKeyringBackend)
+	viper.SetDefault("whale.allowed_denoms", []string{defaultGasDenom})
+	viper.SetDefault("whale.keyring_dir", defaultHomeDir)
+	viper.SetDefault("bots.keyring_backend", testKeyringBackend)
+	viper.SetDefault("bots.keyring_dir", defaultHomeDir)
+	viper.SetDefault("bots.number_of_bots", defaultNumberOfBots)
+	viper.SetDefault("bots.top_up_factor", defaultBotTopUpFactor)
 	viper.SetDefault("node_address", defaultNodeAddress)
 	viper.SetDefault("gas_prices", defaultGasPrices)
 	viper.SetDefault("minimum_gas_balance", defaultMinimumGasBalance)
-	viper.SetDefault("number_of_bots", defaultNumberOfBots)
-	viper.SetDefault("bot_top_up_factor", defaultBotTopUpFactor)
 	viper.SetDefault("max_orders_per_tx", defaultMaxOrdersPerTx)
 	viper.SetDefault("order_refresh_interval", defaultOrderRefreshInterval)
 	viper.SetDefault("order_cleanup_interval", defaultOrderCleanupInterval)
@@ -95,17 +115,25 @@ func initConfig() {
 	}
 }
 
-func getCosmosClientOptions(config Config) []cosmosclient.Option {
+type clientConfig struct {
+	homeDir        string
+	nodeAddress    string
+	gasFees        string
+	gasPrices      string
+	keyringBackend cosmosaccount.KeyringBackend
+}
+
+func getCosmosClientOptions(config clientConfig) []cosmosclient.Option {
 	options := []cosmosclient.Option{
 		cosmosclient.WithAddressPrefix(hubAddressPrefix),
-		cosmosclient.WithHome(config.HomeDir),
+		cosmosclient.WithHome(config.homeDir),
 		cosmosclient.WithBroadcastMode(flags.BroadcastBlock),
-		cosmosclient.WithNodeAddress(config.NodeAddress),
-		cosmosclient.WithFees(config.GasFees),
+		cosmosclient.WithNodeAddress(config.nodeAddress),
+		cosmosclient.WithFees(config.gasFees),
 		cosmosclient.WithGasLimit(defaultGasLimit),
-		cosmosclient.WithGasPrices(config.GasPrices),
-		cosmosclient.WithKeyringBackend(cosmosaccount.KeyringBackend(config.KeyringBackend)),
-		cosmosclient.WithKeyringDir(config.HomeDir),
+		cosmosclient.WithGasPrices(config.gasPrices),
+		cosmosclient.WithKeyringBackend(config.keyringBackend),
+		cosmosclient.WithKeyringDir(config.homeDir),
 	}
 	return options
 }

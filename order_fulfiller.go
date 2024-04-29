@@ -43,7 +43,8 @@ func (ol *orderFulfiller) fulfillOrders(
 			case <-ctx.Done():
 				return
 			case batch := <-retryQueueCh:
-				ol.logger.Info(
+				time.Sleep(1 * time.Second) // TODO: make it nicer
+				ol.logger.Debug(
 					"sending orders for retry",
 					zap.String("bot-name", ol.accountSvc.accountName),
 					zap.Int("count", len(batch)),
@@ -67,7 +68,7 @@ func (ol *orderFulfiller) fulfillOrders(
 				coins = coins.Add(order.price...)
 			}
 
-			ol.logger.Info("ensuring balances for orders")
+			ol.logger.Debug("ensuring balances for orders")
 
 			ensuredDenoms, err := ol.accountSvc.ensureBalances(ctx, coins)
 			if err != nil {
@@ -91,7 +92,7 @@ func (ol *orderFulfiller) fulfillOrders(
 			}
 
 			if len(ids) == 0 {
-				ol.logger.Info(
+				ol.logger.Debug(
 					"no orders to fulfill",
 					zap.String("bot-name", ol.accountSvc.accountName),
 					zap.Int("count", len(leftoverBatch)),

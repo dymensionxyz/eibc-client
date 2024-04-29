@@ -4,16 +4,17 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"slices"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 )
 
 type orderClient struct {
-	slack  slacker
 	logger *zap.Logger
 	config Config
 	bots   map[string]*bot
@@ -26,27 +27,36 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	sdkcfg := sdk.GetConfig()
 	sdkcfg.SetBech32PrefixForAccount(hubAddressPrefix, pubKeyPrefix)
 
-	logger, err := zap.NewProduction()
+	logger, err := buildLogger(config.LogLevel)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create logger: %w", err)
 	}
+
+	defer logger.Sync() // Ensure all logs are written
 
 	minGasBalance, err := sdk.ParseCoinNormalized(config.MinimumGasBalance)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse minimum gas balance: %w", err)
 	}
 
-	// init cosmos client
-	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(config)...)
+	// init cosmos client for order fetcher
+	fetcherClientCfg := clientConfig{
+		homeDir:        config.Bots.KeyringDir,
+		nodeAddress:    config.NodeAddress,
+		gasFees:        config.GasFees,
+		gasPrices:      config.GasPrices,
+		keyringBackend: config.Bots.KeyringBackend,
+	}
+	fetcherCosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(fetcherClientCfg)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cosmos client: %w", err)
 	}
 
 	orderCh := make(chan []*demandOrder, newOrderBufferSize)
 	failedCh := make(chan []string, newOrderBufferSize) // TODO: make buffer size configurable
-	ordFetcher := newOrderFetcher(cosmosClient, config.MaxOrdersPerTx, orderCh, failedCh, logger)
-	topUpCh := make(chan topUpRequest, config.NumberOfBots) // TODO: make buffer size configurable
-	bin := "dymd"                                           // TODO: from config
+	ordFetcher := newOrderFetcher(fetcherCosmosClient, config.Bots.MaxOrdersPerTx, orderCh, failedCh, logger)
+	topUpCh := make(chan topUpRequest, config.Bots.NumberOfBots) // TODO: make buffer size configurable
+	bin := "dymd"                                                // TODO: from config
 
 	accs, err := getBotAccounts(bin, config.HomeDir)
 	if err != nil {
@@ -56,7 +66,7 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	numFoundBots := len(accs)
 	logger.Info("found local bot accounts", zap.Int("accounts", numFoundBots))
 
-	botsAccountsToCreate := int(math.Max(0, float64(config.NumberOfBots)-float64(numFoundBots)))
+	botsAccountsToCreate := int(math.Max(0, float64(config.Bots.NumberOfBots)-float64(numFoundBots)))
 	newNames, err := createBotAccounts(bin, config.HomeDir, botsAccountsToCreate)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create bot accounts: %w", err)
@@ -64,31 +74,50 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 
 	accs = slices.Concat(accs, newNames)
 
-	if len(accs) < config.NumberOfBots {
-		return nil, fmt.Errorf("expected %d bot accounts, got %d", config.NumberOfBots, len(accs))
+	if len(accs) < config.Bots.NumberOfBots {
+		return nil, fmt.Errorf("expected %d bot accounts, got %d", config.Bots.NumberOfBots, len(accs))
 	}
 
 	// create bots
 	bots := make(map[string]*bot)
-	for i := range config.NumberOfBots {
-		b, err := buildBot(ctx, accs[i], logger, config, minGasBalance, orderCh, failedCh, topUpCh)
+	for i := range config.Bots.NumberOfBots {
+		b, err := buildBot(
+			ctx,
+			accs[i],
+			logger,
+			config.Bots,
+			config.NodeAddress,
+			config.GasFees,
+			config.GasPrices,
+			minGasBalance,
+			orderCh,
+			failedCh,
+			topUpCh,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create bot: %w", err)
 		}
 		bots[b.name] = b
 	}
 
-	whaleSvc, err := buildWhale(ctx, logger, config, minGasBalance, topUpCh)
+	slackClient := newSlacker(config.SlackConfig, logger)
+
+	whaleSvc, err := buildWhale(
+		ctx,
+		logger,
+		config.Whale,
+		slackClient,
+		config.NodeAddress,
+		config.GasFees,
+		config.GasPrices,
+		minGasBalance,
+		topUpCh,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create whale: %w", err)
 	}
 
 	oc := &orderClient{
-		/*slack: slacker{
-			Client:    slack.New(config.SlackConfig.AppToken),
-			channelID: config.SlackConfig.ChannelID,
-			enabled:   config.SlackConfig.Enabled,
-		},*/
 		orderFetcher: ordFetcher,
 		bots:         bots,
 		whale:        whaleSvc,
@@ -134,13 +163,22 @@ func buildBot(
 	ctx context.Context,
 	name string,
 	logger *zap.Logger,
-	config Config,
+	config botConfig,
+	nodeAddress, gasFees, gasPrices string,
 	minimumGasBalance sdk.Coin,
 	orderCh chan []*demandOrder,
 	failedCh chan []string,
 	topUpCh chan topUpRequest,
 ) (*bot, error) {
-	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(config)...)
+	clientCfg := clientConfig{
+		homeDir:        config.KeyringDir,
+		keyringBackend: config.KeyringBackend,
+		nodeAddress:    nodeAddress,
+		gasFees:        gasFees,
+		gasPrices:      gasPrices,
+	}
+
+	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(clientCfg)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cosmos client for bot: %s;err: %w", name, err)
 	}
@@ -151,7 +189,7 @@ func buildBot(
 		name,
 		minimumGasBalance,
 		topUpCh,
-		withTopUpFactor(config.BotTopUpFactor),
+		withTopUpFactor(config.TopUpFactor),
 	)
 
 	fulfiller := newOrderFulfiller(accountSvc, cosmosClient, logger)
@@ -163,16 +201,52 @@ func buildBot(
 func buildWhale(
 	ctx context.Context,
 	logger *zap.Logger,
-	config Config,
+	config whaleConfig,
+	slack *slacker,
+	nodeAddress, gasFees, gasPrices string,
 	minimumGasBalance sdk.Coin,
 	topUpCh chan topUpRequest,
 ) (*whale, error) {
-	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(config)...)
+	clientCfg := clientConfig{
+		homeDir:        config.KeyringDir,
+		keyringBackend: config.KeyringBackend,
+		nodeAddress:    nodeAddress,
+		gasFees:        gasFees,
+		gasPrices:      gasPrices,
+	}
+
+	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(clientCfg)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cosmos client for whale: %w", err)
 	}
 
-	accountSvc := newAccountService(cosmosClient, logger, config.WhaleAccountName, minimumGasBalance, topUpCh)
+	accountSvc := newAccountService(cosmosClient, logger, config.AccountName, minimumGasBalance, topUpCh)
 
-	return newWhale(accountSvc, logger, topUpCh), nil
+	return newWhale(
+		accountSvc,
+		config.AllowedDenoms,
+		logger,
+		slack,
+		cosmosClient.Context().ChainID,
+		clientCfg.nodeAddress,
+		topUpCh,
+	), nil
+}
+
+func buildLogger(logLevel string) (*zap.Logger, error) {
+	var level zapcore.Level
+	if err := level.Set(logLevel); err != nil {
+		return nil, fmt.Errorf("failed to set log level: %w", err)
+	}
+
+	encoderConfig := zap.NewProductionEncoderConfig()
+	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+
+	logger := zap.New(zapcore.NewCore(
+		zapcore.NewJSONEncoder(encoderConfig),
+		zapcore.Lock(os.Stdout),
+		level,
+	))
+
+	return logger, nil
 }
