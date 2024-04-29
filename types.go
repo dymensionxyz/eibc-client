@@ -5,10 +5,9 @@ import (
 )
 
 type demandOrder struct {
-	id              string
-	price           sdk.Coins
-	fee             sdk.Coins
-	alertedLowFunds bool // TODO: remove
+	id    string
+	price sdk.Coins
+	fee   sdk.Coins
 }
 
 type account struct {

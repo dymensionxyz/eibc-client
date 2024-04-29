@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -10,14 +11,14 @@ import (
 )
 
 type whale struct {
-	accountSvc    *accountService
-	logger        *zap.Logger
-	topUpCh       <-chan topUpRequest
-	allowedDenoms map[string]struct{}
-	admu          sync.Mutex
-	alertedDenoms map[string]struct{}
-	slack         *slacker
-	chainID, node string
+	accountSvc        *accountService
+	logger            *zap.Logger
+	topUpCh           <-chan topUpRequest
+	balanceThresholds map[string]sdk.Coin
+	admu              sync.Mutex
+	alertedDenoms     map[string]struct{}
+	slack             *slacker
+	chainID, node     string
 }
 
 type topUpRequest struct {
@@ -28,25 +29,21 @@ type topUpRequest struct {
 
 func newWhale(
 	accountSvc *accountService,
-	allowedDenoms []string,
+	balanceThresholds map[string]sdk.Coin,
 	logger *zap.Logger,
 	slack *slacker,
 	chainID, node string,
 	topUpCh <-chan topUpRequest,
 ) *whale {
-	allowedDenomsMap := make(map[string]struct{}, len(allowedDenoms))
-	for _, denom := range allowedDenoms {
-		allowedDenomsMap[denom] = struct{}{}
-	}
 	return &whale{
-		accountSvc:    accountSvc,
-		logger:        logger.With(zap.String("module", "whale")),
-		topUpCh:       topUpCh,
-		slack:         slack,
-		allowedDenoms: allowedDenomsMap,
-		alertedDenoms: make(map[string]struct{}),
-		chainID:       chainID,
-		node:          node,
+		accountSvc:        accountSvc,
+		logger:            logger.With(zap.String("module", "whale")),
+		topUpCh:           topUpCh,
+		slack:             slack,
+		balanceThresholds: balanceThresholds,
+		alertedDenoms:     make(map[string]struct{}),
+		chainID:           chainID,
+		node:              node,
 	}
 }
 
@@ -90,15 +87,29 @@ func (w *whale) topUp(ctx context.Context, coins sdk.Coins, toAddr string) []str
 
 	canTopUp := sdk.NewCoins()
 	for _, coin := range coins {
-		if len(w.allowedDenoms) > 0 {
-			if _, ok := w.allowedDenoms[coin.Denom]; !ok {
-				continue
-			}
-		}
 		balance := whaleBalances.AmountOf(coin.Denom)
+
+		// if balance thresholds are defined,
+		// we check if this coin is in the list
+		threshold, ok := w.balanceThresholds[strings.ToLower(coin.Denom)]
+		if !ok && len(w.balanceThresholds) > 0 {
+			continue
+		}
+
 		diff := balance.Sub(coin.Amount)
 		if diff.IsPositive() {
+			// if the balance is greater than the required amount, remove the alert
+			go w.removeAlerted(coin.Denom)
+
 			canTopUp = canTopUp.Add(coin)
+			whaleBalances = whaleBalances.Sub(coin)
+			newBalance := whaleBalances.AmountOf(coin.Denom)
+
+			// if balance thresholds are defined and the new balance is below the threshold,
+			// we alert the user
+			if len(w.balanceThresholds) > 0 && newBalance.LTE(threshold.Amount) {
+				go w.alertLowBalance(ctx, coin, sdk.NewCoin(coin.Denom, newBalance))
+			}
 		} else {
 			go w.alertLowBalance(ctx, coin, sdk.NewCoin(coin.Denom, balance))
 		}
@@ -157,4 +168,11 @@ func (w *whale) alertLowBalance(ctx context.Context, coin, balance sdk.Coin) {
 	if err != nil {
 		w.logger.Error("failed to beg on slack", zap.Error(err))
 	}
+}
+
+func (w *whale) removeAlerted(denom string) {
+	w.admu.Lock()
+	defer w.admu.Unlock()
+
+	delete(w.alertedDenoms, denom)
 }

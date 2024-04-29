@@ -76,6 +76,10 @@ func (ol *orderFulfiller) fulfillOrders(
 				return
 			}
 
+			if len(ensuredDenoms) > 0 {
+				ol.logger.Info("ensured balances for orders", zap.Strings("denoms", ensuredDenoms))
+			}
+
 			leftoverBatch := make([]*demandOrder, 0, len(batch))
 			ids := make([]string, 0, len(batch))
 
@@ -108,6 +112,8 @@ func (ol *orderFulfiller) fulfillOrders(
 				failedOrderIDs <- ids
 				continue
 			}
+
+			ol.logger.Info("orders fulfilled", zap.Int("count", len(ids)))
 
 			// mark the orders as fulfilled
 			/*for _, id := range ids {

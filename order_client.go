@@ -215,6 +215,17 @@ func buildWhale(
 		gasPrices:      gasPrices,
 	}
 
+	balanceThresholdMap := make(map[string]sdk.Coin)
+	for denom, threshold := range config.AllowedBalanceThresholds {
+		coinStr := threshold + denom
+		coin, err := sdk.ParseCoinNormalized(coinStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse threshold coin: %w", err)
+		}
+
+		balanceThresholdMap[denom] = coin
+	}
+
 	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(clientCfg)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cosmos client for whale: %w", err)
@@ -224,7 +235,7 @@ func buildWhale(
 
 	return newWhale(
 		accountSvc,
-		config.AllowedDenoms,
+		balanceThresholdMap,
 		logger,
 		slack,
 		cosmosClient.Context().ChainID,

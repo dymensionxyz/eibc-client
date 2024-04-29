@@ -94,10 +94,9 @@ func (of *orderFetcher) refreshPendingDemandOrders(ctx context.Context) error {
 		// if already in the map, means fulfilled or fulfilling
 		if _, found := of.demandOrders[d.Id]; found || d.IsFullfilled {
 			continue
-		} else {
-			// otherwise, save to prevent duplicates
-			of.demandOrders[d.Id] = struct{}{}
 		}
+		// otherwise, save to prevent duplicates
+		of.demandOrders[d.Id] = struct{}{}
 		order := &demandOrder{
 			id:    d.Id,
 			price: d.Price,
@@ -106,6 +105,10 @@ func (of *orderFetcher) refreshPendingDemandOrders(ctx context.Context) error {
 		unfulfilledOrders = append(unfulfilledOrders, order)
 	}
 	of.domu.Unlock()
+
+	if len(unfulfilledOrders) == 0 {
+		return nil
+	}
 
 	of.logger.Info("new demand orders", zap.Int("count", len(unfulfilledOrders)))
 
@@ -146,10 +149,9 @@ func (of *orderFetcher) enqueueEventOrders(res tmtypes.ResultEvent) {
 		// exclude ones that are already fulfilled or fulfilling
 		if _, found := of.demandOrders[id]; found {
 			continue
-		} else {
-			// otherwise, save to prevent duplicates
-			of.demandOrders[id] = struct{}{}
 		}
+		// otherwise, save to prevent duplicates
+		of.demandOrders[id] = struct{}{}
 
 		price, err := sdk.ParseCoinNormalized(prices[i])
 		if err != nil {
@@ -169,6 +171,10 @@ func (of *orderFetcher) enqueueEventOrders(res tmtypes.ResultEvent) {
 		unfulfilledOrders = append(unfulfilledOrders, order)
 	}
 	of.domu.Unlock()
+
+	if len(unfulfilledOrders) == 0 {
+		return
+	}
 
 	of.logger.Info("new demand orders", zap.Int("count", len(unfulfilledOrders)))
 

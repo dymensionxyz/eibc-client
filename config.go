@@ -38,10 +38,10 @@ type botConfig struct {
 }
 
 type whaleConfig struct {
-	AccountName    string                       `mapstructure:"account_name"`
-	KeyringBackend cosmosaccount.KeyringBackend `mapstructure:"keyring_backend"`
-	KeyringDir     string                       `mapstructure:"keyring_dir"`
-	AllowedDenoms  []string                     `mapstructure:"allowed_denoms"`
+	AccountName              string                       `mapstructure:"account_name"`
+	KeyringBackend           cosmosaccount.KeyringBackend `mapstructure:"keyring_backend"`
+	KeyringDir               string                       `mapstructure:"keyring_dir"`
+	AllowedBalanceThresholds map[string]string            `mapstructure:"allowed_balance_thresholds"`
 }
 
 type slackConfig struct {
@@ -73,6 +73,8 @@ const (
 	defaultDisputePeriodRefreshInterval = 10 * time.Hour
 )
 
+var defaultBalanceThresholds = map[string]string{defaultGasDenom: "1000000000000"}
+
 func initConfig() {
 	// Set default values
 	// Find home directory.
@@ -86,7 +88,7 @@ func initConfig() {
 	viper.SetDefault("log_level", defaultLogLevel)
 	viper.SetDefault("whale.account_name", whaleAccountName)
 	viper.SetDefault("whale.keyring_backend", testKeyringBackend)
-	viper.SetDefault("whale.allowed_denoms", []string{defaultGasDenom})
+	viper.SetDefault("whale.allowed_balance_thresholds", defaultBalanceThresholds)
 	viper.SetDefault("whale.keyring_dir", defaultHomeDir)
 	viper.SetDefault("bots.keyring_backend", testKeyringBackend)
 	viper.SetDefault("bots.keyring_dir", defaultHomeDir)
