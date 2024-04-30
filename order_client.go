@@ -67,7 +67,11 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	logger.Info("found local bot accounts", zap.Int("accounts", numFoundBots))
 
 	botsAccountsToCreate := int(math.Max(0, float64(config.Bots.NumberOfBots)-float64(numFoundBots)))
-	newNames, err := createBotAccounts(bin, config.HomeDir, botsAccountsToCreate)
+	if botsAccountsToCreate > 0 {
+		logger.Info("creating bot accounts", zap.Int("accounts", botsAccountsToCreate))
+	}
+
+	newNames, err := createBotAccounts(bin, config.Bots.KeyringDir, botsAccountsToCreate)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create bot accounts: %w", err)
 	}

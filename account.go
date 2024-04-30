@@ -29,6 +29,8 @@ type accountService struct {
 	topUpCh           chan<- topUpRequest
 }
 
+const noRecordsFound = "No records were found in keyring\n"
+
 type option func(*accountService)
 
 func withTopUpFactor(topUpFactor uint64) option {
@@ -98,6 +100,9 @@ func listAccounts(bin string, homeDir string) ([]account, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if string(out) == noRecordsFound {
+		return nil, nil
 	}
 
 	var accounts []account
