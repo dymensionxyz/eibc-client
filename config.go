@@ -58,7 +58,7 @@ const (
 	defaultLogLevel          = "info"
 	defaultGasLimit          = 300000
 	defaultGasDenom          = "adym"
-	defaultGasPrices         = "2000000000" + defaultGasDenom
+	defaultGasFees           = "100000000000000000" + defaultGasDenom
 	defaultMinimumGasBalance = "40000000000" + defaultGasDenom
 	testKeyringBackend       = "test"
 
@@ -95,7 +95,7 @@ func initConfig() {
 	viper.SetDefault("bots.number_of_bots", defaultNumberOfBots)
 	viper.SetDefault("bots.top_up_factor", defaultBotTopUpFactor)
 	viper.SetDefault("node_address", defaultNodeAddress)
-	viper.SetDefault("gas_prices", defaultGasPrices)
+	viper.SetDefault("gas_fees", defaultGasFees)
 	viper.SetDefault("minimum_gas_balance", defaultMinimumGasBalance)
 	viper.SetDefault("max_orders_per_tx", defaultMaxOrdersPerTx)
 	viper.SetDefault("order_refresh_interval", defaultOrderRefreshInterval)
