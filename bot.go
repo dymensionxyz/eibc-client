@@ -32,11 +32,6 @@ func newBot(
 }
 
 func (b *bot) start(ctx context.Context) error {
-	// setup account
-	if err := b.fulfiller.accountSvc.setupAccount(); err != nil { // TODO: wrap
-		return fmt.Errorf("failed to setup account: %w", err)
-	}
-
 	balances, err := b.fulfiller.accountSvc.getAccountBalances(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get account balances: %w", err)

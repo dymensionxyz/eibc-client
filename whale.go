@@ -48,10 +48,6 @@ func newWhale(
 }
 
 func (w *whale) start(ctx context.Context) error {
-	if err := w.accountSvc.setupAccount(); err != nil {
-		return fmt.Errorf("failed to setup account: %w", err)
-	}
-
 	balances, err := w.accountSvc.getAccountBalances(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get account balances: %w", err)

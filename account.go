@@ -46,7 +46,7 @@ func newAccountService(
 	minimumGasBalance sdk.Coin,
 	topUpCh chan topUpRequest,
 	options ...option,
-) *accountService {
+) (*accountService, error) {
 	a := &accountService{
 		client:            client,
 		logger:            logger.With(zap.String("module", "account-service")),
@@ -58,7 +58,12 @@ func newAccountService(
 	for _, opt := range options {
 		opt(a)
 	}
-	return a
+
+	if err := a.setupAccount(); err != nil {
+		return nil, fmt.Errorf("failed to setup account: %w", err)
+	}
+
+	return a, nil
 }
 
 func addAccount(bin, name, homeDir string) (string, error) {

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"math"
 	"os"
 	"slices"
 
@@ -58,52 +57,6 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	topUpCh := make(chan topUpRequest, config.Bots.NumberOfBots) // TODO: make buffer size configurable
 	bin := "dymd"                                                // TODO: from config
 
-	accs, err := getBotAccounts(bin, config.Bots.KeyringDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get bot accounts: %w", err)
-	}
-
-	numFoundBots := len(accs)
-	logger.Info("found local bot accounts", zap.Int("accounts", numFoundBots))
-
-	botsAccountsToCreate := int(math.Max(0, float64(config.Bots.NumberOfBots)-float64(numFoundBots)))
-	if botsAccountsToCreate > 0 {
-		logger.Info("creating bot accounts", zap.Int("accounts", botsAccountsToCreate))
-	}
-
-	newNames, err := createBotAccounts(bin, config.Bots.KeyringDir, botsAccountsToCreate)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create bot accounts: %w", err)
-	}
-
-	accs = slices.Concat(accs, newNames)
-
-	if len(accs) < config.Bots.NumberOfBots {
-		return nil, fmt.Errorf("expected %d bot accounts, got %d", config.Bots.NumberOfBots, len(accs))
-	}
-
-	// create bots
-	bots := make(map[string]*bot)
-	for i := range config.Bots.NumberOfBots {
-		b, err := buildBot(
-			ctx,
-			accs[i],
-			logger,
-			config.Bots,
-			config.NodeAddress,
-			config.GasFees,
-			config.GasPrices,
-			minGasBalance,
-			orderCh,
-			failedCh,
-			topUpCh,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create bot: %w", err)
-		}
-		bots[b.name] = b
-	}
-
 	slackClient := newSlacker(config.SlackConfig, logger)
 
 	whaleSvc, err := buildWhale(
@@ -121,6 +74,67 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		return nil, fmt.Errorf("failed to create whale: %w", err)
 	}
 
+	accs, err := getBotAccounts(bin, config.Bots.KeyringDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get bot accounts: %w", err)
+	}
+
+	numFoundBots := len(accs)
+	logger.Info("found local bot accounts", zap.Int("accounts", numFoundBots))
+
+	botsAccountsToCreate := max(0, config.Bots.NumberOfBots) - numFoundBots
+	if botsAccountsToCreate > 0 {
+		logger.Info("creating bot accounts", zap.Int("accounts", botsAccountsToCreate))
+	}
+
+	newNames, err := createBotAccounts(bin, config.Bots.KeyringDir, botsAccountsToCreate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create bot accounts: %w", err)
+	}
+
+	accs = slices.Concat(accs, newNames)
+
+	if len(accs) < config.Bots.NumberOfBots {
+		return nil, fmt.Errorf("expected %d bot accounts, got %d", config.Bots.NumberOfBots, len(accs))
+	}
+
+	// create bots
+	bots := make(map[string]*bot)
+
+	var botIdx int
+	for botIdx = range config.Bots.NumberOfBots {
+		b, err := buildBot(
+			ctx,
+			accs[botIdx],
+			logger,
+			config.Bots,
+			config.NodeAddress,
+			config.GasFees,
+			config.GasPrices,
+			minGasBalance,
+			orderCh,
+			failedCh,
+			topUpCh,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create bot: %w", err)
+		}
+		bots[b.name] = b
+	}
+
+	// TODO: move to account.go
+	whaleAcc, err := whaleSvc.accountSvc.client.AccountRegistry.GetByName(whaleSvc.accountSvc.accountName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get whale account: %w", err)
+	}
+
+	whaleAddr, err := whaleAcc.Record.GetAddress()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get whale address: %w", err)
+	}
+
+	refundFromExtraBotsToWhale(ctx, config, botIdx, accs, whaleAddr.String(), config.GasFees, logger)
+
 	oc := &orderClient{
 		orderFetcher: ordFetcher,
 		bots:         bots,
@@ -130,6 +144,70 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	}
 
 	return oc, nil
+}
+
+func refundFromExtraBotsToWhale(
+	ctx context.Context,
+	config Config,
+	botIdx int,
+	accs []string,
+	whaleAddress string,
+	gasFeesStr string,
+	logger *zap.Logger,
+) {
+	refunded := sdk.NewCoins()
+
+	gasFees, err := sdk.ParseCoinNormalized(gasFeesStr)
+	if err != nil {
+		logger.Error("failed to parse gas fees", zap.Error(err))
+		return
+	}
+
+	// return funds from extra bots to whale
+	for ; botIdx < len(accs); botIdx++ {
+		b, err := buildBot(
+			ctx,
+			accs[botIdx],
+			logger,
+			config.Bots,
+			config.NodeAddress,
+			config.GasFees,
+			config.GasPrices,
+			sdk.Coin{}, nil, nil, nil,
+		)
+		if err != nil {
+			logger.Error("failed to create bot", zap.Error(err))
+			continue
+		}
+
+		// TODO: if bots have other denoms but low gas, use whale as the fee payer
+
+		botBalances, err := b.fulfiller.accountSvc.getAccountBalances(ctx)
+		if err != nil {
+			logger.Error("failed to get bot balances", zap.Error(err))
+			continue
+		}
+
+		if botBalances.AmountOf(gasFees.Denom).LT(gasFees.Amount) {
+			continue
+		}
+
+		botBalances = botBalances.Sub(gasFees)
+
+		if len(botBalances) == 0 {
+			continue
+		}
+
+		if err = b.fulfiller.accountSvc.sendCoins(botBalances, whaleAddress); err != nil {
+			logger.Error("failed to return funds to whale", zap.Error(err))
+			continue
+		}
+
+		refunded = refunded.Add(botBalances...)
+	}
+
+	logger.Info("refunded funds from extra bots to whale",
+		zap.Int("bots", len(accs)-config.Bots.NumberOfBots), zap.String("refunded", refunded.String()))
 }
 
 func (oc *orderClient) start(ctx context.Context) error {
@@ -187,7 +265,7 @@ func buildBot(
 		return nil, fmt.Errorf("failed to create cosmos client for bot: %s;err: %w", name, err)
 	}
 
-	accountSvc := newAccountService(
+	accountSvc, err := newAccountService(
 		cosmosClient,
 		logger,
 		name,
@@ -195,6 +273,9 @@ func buildBot(
 		topUpCh,
 		withTopUpFactor(config.TopUpFactor),
 	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create account service for bot: %s;err: %w", name, err)
+	}
 
 	fulfiller := newOrderFulfiller(accountSvc, cosmosClient, logger)
 	b := newBot(name, fulfiller, orderCh, failedCh, logger)
@@ -235,7 +316,10 @@ func buildWhale(
 		return nil, fmt.Errorf("failed to create cosmos client for whale: %w", err)
 	}
 
-	accountSvc := newAccountService(cosmosClient, logger, config.AccountName, minimumGasBalance, topUpCh)
+	accountSvc, err := newAccountService(cosmosClient, logger, config.AccountName, minimumGasBalance, topUpCh)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create account service for whale: %w", err)
+	}
 
 	return newWhale(
 		accountSvc,
