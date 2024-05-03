@@ -73,6 +73,11 @@ var startCmd = &cobra.Command{
 			log.Fatalf("failed to create order client: %v", err)
 		}
 
+		if config.Bots.NumberOfBots == 0 {
+			log.Println("no bots to start")
+			return
+		}
+
 		if err := oc.start(cmd.Context()); err != nil {
 			log.Fatalf("failed to start order client: %v", err)
 		}

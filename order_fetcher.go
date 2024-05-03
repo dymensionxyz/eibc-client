@@ -2,13 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/dymensionxyz/dymension/v3/x/common/types"
-	eibctypes "github.com/dymensionxyz/dymension/v3/x/eibc/types"
 	tmtypes "github.com/tendermint/tendermint/rpc/core/types"
 	"go.uber.org/zap"
 
@@ -16,8 +20,11 @@ import (
 )
 
 type orderFetcher struct {
-	client cosmosclient.Client
-	logger *zap.Logger
+	client        cosmosclient.Client
+	denomFetch    *denomFetcher
+	indexerURL    string
+	indexerClient *http.Client
+	logger        *zap.Logger
 
 	batchSize      int
 	domu           sync.Mutex
@@ -28,6 +35,8 @@ type orderFetcher struct {
 
 func newOrderFetcher(
 	client cosmosclient.Client,
+	denomFetch *denomFetcher,
+	indexerURL string,
 	batchSize int,
 	newOrders chan []*demandOrder,
 	failedOrdersCh chan []string,
@@ -35,6 +44,9 @@ func newOrderFetcher(
 ) *orderFetcher {
 	return &orderFetcher{
 		client:         client,
+		denomFetch:     denomFetch,
+		indexerURL:     indexerURL,
+		indexerClient:  &http.Client{Timeout: 30 * time.Second},
 		batchSize:      batchSize,
 		logger:         logger.With(zap.String("module", "order-fetcher")),
 		newOrders:      newOrders,
@@ -80,27 +92,35 @@ func (of *orderFetcher) deleteFailedOrder(ids []string) {
 func (of *orderFetcher) refreshPendingDemandOrders(ctx context.Context) error {
 	of.logger.Debug("refreshing demand orders")
 
-	res, err := of.getDemandOrdersByStatus(ctx, types.Status_PENDING.String())
+	orders, err := of.getDemandOrdersFromIndexer(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get demand orders: %w", err)
 	}
 
-	unfulfilledOrders := make([]*demandOrder, 0, len(res))
+	unfulfilledOrders := make([]*demandOrder, 0, len(orders))
 
 	// TODO: maybe check here which denoms the whale can provide funds for
 
 	of.domu.Lock()
-	for _, d := range res {
+	for _, d := range orders {
 		// if already in the map, means fulfilled or fulfilling
-		if _, found := of.demandOrders[d.Id]; found || d.IsFullfilled {
+		if _, found := of.demandOrders[d.EibcOrderId]; found {
+			continue
+		}
+
+		amountStr := fmt.Sprintf("%s%s", d.Amount, d.Denom)
+
+		amount, err := sdk.ParseCoinNormalized(amountStr)
+		if err != nil {
+			of.logger.Error("failed to parse amount", zap.Error(err))
 			continue
 		}
 		// otherwise, save to prevent duplicates
-		of.demandOrders[d.Id] = struct{}{}
+		of.demandOrders[d.EibcOrderId] = struct{}{}
 		order := &demandOrder{
-			id:    d.Id,
-			price: d.Price,
-			fee:   d.Fee,
+			id:    d.EibcOrderId,
+			price: sdk.NewCoins(amount),
+			// fee:   d.Fee,
 		}
 		unfulfilledOrders = append(unfulfilledOrders, order)
 	}
@@ -176,7 +196,7 @@ func (of *orderFetcher) enqueueEventOrders(res tmtypes.ResultEvent) {
 		return
 	}
 
-	of.logger.Info("new demand orders", zap.Int("count", len(unfulfilledOrders)))
+	of.logger.Info("new demand orders from event", zap.Int("count", len(unfulfilledOrders)))
 
 	batch := make([]*demandOrder, 0, of.batchSize)
 
@@ -190,15 +210,79 @@ func (of *orderFetcher) enqueueEventOrders(res tmtypes.ResultEvent) {
 	}
 }
 
-func (of *orderFetcher) getDemandOrdersByStatus(ctx context.Context, status string) ([]*eibctypes.DemandOrder, error) {
-	queryClient := eibctypes.NewQueryClient(of.client.Context())
-	resp, err := queryClient.DemandOrdersByStatus(ctx, &eibctypes.QueryDemandOrdersByStatusRequest{
-		Status: status,
-	})
+const (
+	ordersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: {equalTo: EibcPending}}) {nodes { eibcOrderId denom amount destinationChannel time }}}"}`
+)
+
+type Order struct {
+	EibcOrderId        string `json:"eibcOrderId"`
+	Denom              string `json:"denom"`
+	Amount             string `json:"amount"`
+	DestinationChannel string `json:"destinationChannel"`
+	Time               string `json:"time"`
+	time               time.Time
+}
+
+type ordersResponse struct {
+	Data struct {
+		IbcTransferDetails struct {
+			Nodes []Order `json:"nodes"`
+		} `json:"ibcTransferDetails"`
+	} `json:"data"`
+}
+
+func (of *orderFetcher) getDemandOrdersFromIndexer(ctx context.Context) ([]Order, error) {
+	queryStr := fmt.Sprintf(ordersQuery, of.client.Context().ChainID)
+	body := strings.NewReader(queryStr)
+
+	resp, err := of.indexerClient.Post(of.indexerURL, "application/json", body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get demand orders: %w", err)
 	}
-	return resp.DemandOrders, nil
+
+	var res ordersResponse
+	if err = json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	var orders []Order
+
+	// parse the time format of "1714742916108" into time.Time and sort by time
+	for _, order := range res.Data.IbcTransferDetails.Nodes {
+		if order.Time == "" {
+			continue
+		}
+
+		timeUnix, err := strconv.ParseInt(order.Time, 10, 64)
+		if err != nil {
+			of.logger.Error("failed to parse time", zap.Error(err))
+			continue
+		}
+
+		denom, err := of.denomFetch.getDenomFromPath(ctx, order.Denom, order.DestinationChannel)
+		if err != nil {
+			of.logger.Error("failed to get denom hash", zap.String("d.Denom", order.Denom), zap.Error(err))
+			continue
+		}
+
+		newOrder := Order{
+			EibcOrderId:        order.EibcOrderId,
+			Denom:              denom,
+			Amount:             order.Amount,
+			DestinationChannel: order.DestinationChannel,
+			Time:               order.Time,
+			time:               time.Unix(timeUnix/1000, (timeUnix%1000)*int64(time.Millisecond)),
+		}
+
+		orders = append(orders, newOrder)
+	}
+
+	// sort by time
+	sort.Slice(orders, func(i, j int) bool {
+		return orders[i].time.Before(orders[j].time)
+	})
+
+	return orders, nil
 }
 
 func (of *orderFetcher) subscribeToPendingDemandOrders(ctx context.Context) error {

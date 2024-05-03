@@ -21,6 +21,7 @@ type Config struct {
 	OrderRefreshInterval         time.Duration `mapstructure:"order_refresh_interval"`
 	OrderCleanupInterval         time.Duration `mapstructure:"order_cleanup_interval"`
 	DisputePeriodRefreshInterval time.Duration `mapstructure:"dispute_period_refresh_interval"`
+	IndexerURL                   string        `mapstructure:"indexer_url"`
 
 	Whale whaleConfig `mapstructure:"whale"`
 	Bots  botConfig   `mapstructure:"bots"`
@@ -53,13 +54,14 @@ type slackConfig struct {
 
 const (
 	defaultNodeAddress       = "http://localhost:36657"
+	defaultIndexerURL        = "http://44.206.211.230:3000/"
 	hubAddressPrefix         = "dym"
 	pubKeyPrefix             = "pub"
 	defaultLogLevel          = "info"
 	defaultGasLimit          = 300000
-	defaultGasDenom          = "adym"
-	defaultGasFees           = "100000000000000000" + defaultGasDenom
-	defaultMinimumGasBalance = "40000000000" + defaultGasDenom
+	defaultHubDenom          = "adym"
+	defaultGasFees           = "100000000000000000" + defaultHubDenom
+	defaultMinimumGasBalance = "40000000000" + defaultHubDenom
 	testKeyringBackend       = "test"
 
 	botNamePrefix                       = "bot-"
@@ -73,7 +75,7 @@ const (
 	defaultDisputePeriodRefreshInterval = 10 * time.Hour
 )
 
-var defaultBalanceThresholds = map[string]string{defaultGasDenom: "1000000000000"}
+var defaultBalanceThresholds = map[string]string{defaultHubDenom: "1000000000000"}
 
 func initConfig() {
 	// Set default values
@@ -104,6 +106,7 @@ func initConfig() {
 	viper.SetDefault("slack.enabled", false)
 	viper.SetDefault("slack.app_token", "<your-slack-app-token>")
 	viper.SetDefault("slack.channel_id", "<your-slack-channel-id>")
+	viper.SetDefault("indexer_url", defaultIndexerURL)
 
 	viper.SetConfigType("yaml")
 	if cfgFile != "" {
