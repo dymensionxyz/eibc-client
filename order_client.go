@@ -51,9 +51,18 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		return nil, fmt.Errorf("failed to create cosmos client: %w", err)
 	}
 
+	denomFetch := newDenomFetcher(fetcherCosmosClient)
 	orderCh := make(chan []*demandOrder, newOrderBufferSize)
 	failedCh := make(chan []string, newOrderBufferSize) // TODO: make buffer size configurable
-	ordFetcher := newOrderFetcher(fetcherCosmosClient, config.Bots.MaxOrdersPerTx, orderCh, failedCh, logger)
+	ordFetcher := newOrderFetcher(
+		fetcherCosmosClient,
+		denomFetch,
+		config.IndexerURL,
+		config.Bots.MaxOrdersPerTx,
+		orderCh,
+		failedCh,
+		logger,
+	)
 	topUpCh := make(chan topUpRequest, config.Bots.NumberOfBots) // TODO: make buffer size configurable
 	bin := "dymd"                                                // TODO: from config
 
@@ -80,7 +89,6 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	}
 
 	numFoundBots := len(accs)
-	logger.Info("found local bot accounts", zap.Int("accounts", numFoundBots))
 
 	botsAccountsToCreate := max(0, config.Bots.NumberOfBots) - numFoundBots
 	if botsAccountsToCreate > 0 {
@@ -133,6 +141,8 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		return nil, fmt.Errorf("failed to get whale address: %w", err)
 	}
 
+	logger.Info("refunding funds from extra bots to whale", zap.String("whale", whaleAddr.String()))
+
 	refundFromExtraBotsToWhale(ctx, config, botIdx, accs, whaleAddr.String(), config.GasFees, logger)
 
 	oc := &orderClient{
@@ -146,10 +156,39 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	return oc, nil
 }
 
+func (oc *orderClient) start(ctx context.Context) error {
+	oc.logger.Info("starting demand order fetcher...")
+
+	// start order fetcher
+	if err := oc.orderFetcher.start(ctx, oc.config.OrderRefreshInterval, oc.config.OrderCleanupInterval); err != nil {
+		return fmt.Errorf("failed to subscribe to demand orders: %w", err)
+	}
+
+	// start whale service
+	if err := oc.whale.start(ctx); err != nil {
+		return fmt.Errorf("failed to start whale service: %w", err)
+	}
+	// oc.disputePeriodUpdater(ctx)
+
+	oc.logger.Info("starting bots...")
+	// start bots
+	for _, b := range oc.bots {
+		go func() {
+			if err := b.start(ctx); err != nil {
+				oc.logger.Error("failed to bot", zap.Error(err))
+			}
+		}()
+	}
+
+	make(chan struct{}) <- struct{}{} // TODO: make nicer
+
+	return nil
+}
+
 func refundFromExtraBotsToWhale(
 	ctx context.Context,
 	config Config,
-	botIdx int,
+	startBotIdx int,
 	accs []string,
 	whaleAddress string,
 	gasFeesStr string,
@@ -164,10 +203,10 @@ func refundFromExtraBotsToWhale(
 	}
 
 	// return funds from extra bots to whale
-	for ; botIdx < len(accs); botIdx++ {
+	for ; startBotIdx < len(accs); startBotIdx++ {
 		b, err := buildBot(
 			ctx,
-			accs[botIdx],
+			accs[startBotIdx],
 			logger,
 			config.Bots,
 			config.NodeAddress,
@@ -198,45 +237,21 @@ func refundFromExtraBotsToWhale(
 			continue
 		}
 
+		// TODO: specify the whale as the fee payer
 		if err = b.fulfiller.accountSvc.sendCoins(botBalances, whaleAddress); err != nil {
 			logger.Error("failed to return funds to whale", zap.Error(err))
 			continue
 		}
 
+		// TODO: if EMPTY, delete the bot account
+
 		refunded = refunded.Add(botBalances...)
 	}
 
-	logger.Info("refunded funds from extra bots to whale",
-		zap.Int("bots", len(accs)-config.Bots.NumberOfBots), zap.String("refunded", refunded.String()))
-}
-
-func (oc *orderClient) start(ctx context.Context) error {
-	oc.logger.Info("starting demand order fetcher...")
-
-	// start order fetcher
-	if err := oc.orderFetcher.start(ctx, oc.config.OrderRefreshInterval, oc.config.OrderCleanupInterval); err != nil {
-		return fmt.Errorf("failed to subscribe to demand orders: %w", err)
+	if !refunded.Empty() {
+		logger.Info("refunded funds from extra bots to whale",
+			zap.Int("bots", len(accs)-config.Bots.NumberOfBots), zap.String("refunded", refunded.String()))
 	}
-
-	// start whale service
-	if err := oc.whale.start(ctx); err != nil {
-		return fmt.Errorf("failed to start whale service: %w", err)
-	}
-	//	oc.disputePeriodUpdater(ctx)
-
-	oc.logger.Info("starting bots...")
-	// start bots
-	for _, b := range oc.bots {
-		go func() {
-			if err := b.start(ctx); err != nil {
-				oc.logger.Error("failed to bot", zap.Error(err))
-			}
-		}()
-	}
-
-	make(chan struct{}) <- struct{}{} // TODO: make nicer
-
-	return nil
 }
 
 // add command that creates all the bots to be used?
