@@ -145,20 +145,25 @@ var balancesCmd = &cobra.Command{
 			}
 		}
 
-		for _, b := range oc.bots {
-			printAccountBalances(b.accountSvc, longestAmountStr)
+		i := 0
+		for name, b := range oc.bots {
+			i++
+			accPref := fmt.Sprintf("%d. | '%s': ", i, name)
+			printAccountBalances(b.accountSvc, longestAmountStr, accPref)
 		}
 
 		fmt.Println()
 
 		fmt.Println("Whale Balances:")
-		printAccountBalances(oc.whale.accountSvc, longestAmountStr)
+
+		accPref := fmt.Sprintf("Whale | '%s': ", oc.whale.accountSvc.accountName)
+		printAccountBalances(oc.whale.accountSvc, longestAmountStr, accPref)
 
 		fmt.Println()
 	},
 }
 
-func printAccountBalances(acc *accountService, maxBal int) {
+func printAccountBalances(acc *accountService, maxBal int, accPref string) {
 	if acc.balances.IsZero() {
 		return
 	}
@@ -179,7 +184,8 @@ func printAccountBalances(acc *accountService, maxBal int) {
 	}
 
 	fmt.Printf("%s", dividerItem)
-	accLine := fmt.Sprintf("\n| - %s: %s |", acc.accountName, acc.account.GetAddress().String())
+
+	accLine := fmt.Sprintf("\n %s%s |", accPref, acc.account.GetAddress().String())
 	for i := 0; i < len(accLine)-1; i++ {
 		dividerAcc += "-"
 	}
