@@ -14,10 +14,11 @@ import (
 )
 
 type orderClient struct {
-	logger *zap.Logger
-	config Config
-	bots   map[string]*bot
-	whale  *whale
+	logger  *zap.Logger
+	config  Config
+	bots    map[string]*bot
+	orderCh chan []*demandOrder
+	whale   *whale
 
 	orderFetcher *orderFetcher
 }
@@ -53,16 +54,17 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 
 	denomFetch := newDenomFetcher(fetcherCosmosClient)
 	orderCh := make(chan []*demandOrder, newOrderBufferSize)
-	failedCh := make(chan []string, newOrderBufferSize) // TODO: make buffer size configurable
+	unfulfilledCh := make(chan []string, newOrderBufferSize) // TODO: make buffer size configurable
 	ordFetcher := newOrderFetcher(
 		fetcherCosmosClient,
 		denomFetch,
 		config.IndexerURL,
 		config.Bots.MaxOrdersPerTx,
 		orderCh,
-		failedCh,
+		unfulfilledCh,
 		logger,
 	)
+
 	topUpCh := make(chan topUpRequest, config.Bots.NumberOfBots) // TODO: make buffer size configurable
 	bin := "dymd"                                                // TODO: from config
 
@@ -120,8 +122,7 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 			config.GasFees,
 			config.GasPrices,
 			minGasBalance,
-			orderCh,
-			failedCh,
+			unfulfilledCh,
 			topUpCh,
 		)
 		if err != nil {
@@ -149,6 +150,7 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		orderFetcher: ordFetcher,
 		bots:         bots,
 		whale:        whaleSvc,
+		orderCh:      orderCh,
 		config:       config,
 		logger:       logger,
 	}
@@ -180,9 +182,54 @@ func (oc *orderClient) start(ctx context.Context) error {
 		}()
 	}
 
-	make(chan struct{}) <- struct{}{} // TODO: make nicer
+	for batch := range oc.orderCh {
+		botBatches := make(map[string][]*demandOrder)
+		// redistribute the batch to bots
+		// according to their balances for order prices
+		for _, o := range batch {
+			if len(o.price) == 0 {
+				continue
+			}
+
+			b := oc.findBotWithHigestOrderBalance(o.price[0]) // for now we should have only one denom per order
+			botBatches[b.name] = append(botBatches[b.name], o)
+		}
+
+		for name, orders := range botBatches {
+			oc.bots[name].newOrders <- orders
+		}
+	}
 
 	return nil
+}
+
+func (oc *orderClient) findBotWithHigestOrderBalance(orderPrice sdk.Coin) *bot {
+	var (
+		minBalanceDiff sdk.Int
+		highestBot     *bot
+	)
+
+	for _, b := range oc.bots {
+		// make sure we don't return nil
+		if highestBot == nil {
+			highestBot = b
+			minBalanceDiff = orderPrice.Amount
+			continue
+		}
+
+		balance := b.accountSvc.balanceOf(orderPrice.Denom)
+
+		if !balance.IsPositive() {
+			continue
+		}
+
+		if diff := balance.Sub(orderPrice.Amount); diff.LT(minBalanceDiff) {
+			minBalanceDiff = diff
+			highestBot = b
+		}
+	}
+
+	return highestBot
 }
 
 func refundFromExtraBotsToWhale(
@@ -212,40 +259,37 @@ func refundFromExtraBotsToWhale(
 			config.NodeAddress,
 			config.GasFees,
 			config.GasPrices,
-			sdk.Coin{}, nil, nil, nil,
+			sdk.Coin{}, nil, nil,
 		)
 		if err != nil {
 			logger.Error("failed to create bot", zap.Error(err))
 			continue
 		}
 
-		// TODO: if bots have other denoms but low gas, use whale as the fee payer
-
-		botBalances, err := b.fulfiller.accountSvc.getAccountBalances(ctx)
-		if err != nil {
+		if err := b.accountSvc.refreshBalances(ctx); err != nil {
 			logger.Error("failed to get bot balances", zap.Error(err))
 			continue
 		}
 
-		if botBalances.AmountOf(gasFees.Denom).LT(gasFees.Amount) {
+		if b.accountSvc.balanceOf(gasFees.Denom).LT(gasFees.Amount) {
 			continue
 		}
 
-		botBalances = botBalances.Sub(gasFees)
+		b.accountSvc.balances = b.accountSvc.balances.Sub(gasFees)
 
-		if len(botBalances) == 0 {
+		if len(b.accountSvc.balances) == 0 {
 			continue
 		}
 
 		// TODO: specify the whale as the fee payer
-		if err = b.fulfiller.accountSvc.sendCoins(botBalances, whaleAddress); err != nil {
+		if err = b.accountSvc.sendCoins(b.accountSvc.balances, whaleAddress); err != nil {
 			logger.Error("failed to return funds to whale", zap.Error(err))
 			continue
 		}
 
 		// TODO: if EMPTY, delete the bot account
 
-		refunded = refunded.Add(botBalances...)
+		refunded = refunded.Add(b.accountSvc.balances...)
 	}
 
 	if !refunded.Empty() {
@@ -263,8 +307,7 @@ func buildBot(
 	config botConfig,
 	nodeAddress, gasFees, gasPrices string,
 	minimumGasBalance sdk.Coin,
-	orderCh chan []*demandOrder,
-	failedCh chan []string,
+	unfulfilledCh chan []string,
 	topUpCh chan topUpRequest,
 ) (*bot, error) {
 	clientCfg := clientConfig{
@@ -293,7 +336,7 @@ func buildBot(
 	}
 
 	fulfiller := newOrderFulfiller(accountSvc, cosmosClient, logger)
-	b := newBot(name, fulfiller, orderCh, failedCh, logger)
+	b := newBot(name, fulfiller, unfulfilledCh, logger)
 
 	return b, nil
 }

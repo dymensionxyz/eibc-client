@@ -23,6 +23,7 @@ type accountService struct {
 	client            cosmosclient.Client
 	logger            *zap.Logger
 	account           client.Account
+	balances          sdk.Coins
 	minimumGasBalance sdk.Coin
 	accountName       string
 	topUpFactor       uint64
@@ -72,10 +73,12 @@ func addAccount(bin, name, homeDir string) (string, error) {
 		name, "--keyring-backend", "test",
 		"--keyring-dir", homeDir,
 	)
+
 	output, err := cmd.Output()
 	if eerr, ok := err.(*exec.ExitError); ok {
 		output = eerr.Stderr
 	}
+
 	return string(output), err
 }
 
@@ -111,10 +114,10 @@ func listAccounts(bin string, homeDir string) ([]account, error) {
 	}
 
 	var accounts []account
-	err = json.Unmarshal(out, &accounts)
-	if err != nil {
+	if err = json.Unmarshal(out, &accounts); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal accounts: %w", err)
 	}
+
 	return accounts, nil
 }
 
@@ -148,19 +151,12 @@ func (a *accountService) setupAccount() error {
 	return nil
 }
 
-func (a *accountService) ensureBalances(ctx context.Context, coins sdk.Coins) ([]string, error) {
-	// TODO: cache balances locally and update from events
-	accountBalances, err := a.getAccountBalances(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get account balances: %w", err)
-	}
-
-	toTopUp := sdk.NewCoins()
-
+func (a *accountService) ensureBalances(coins sdk.Coins) ([]string, error) {
 	// check if gas balance is below minimum
-	gasBalance := accountBalances.AmountOf(a.minimumGasBalance.Denom)
+	gasBalance := a.balanceOf(a.minimumGasBalance.Denom)
 	gasDiff := a.minimumGasBalance.Amount.Sub(gasBalance)
 
+	toTopUp := sdk.NewCoins()
 	if gasDiff.IsPositive() {
 		toTopUp = toTopUp.Add(a.minimumGasBalance) // add the whole amount instead of the difference
 	}
@@ -169,7 +165,7 @@ func (a *accountService) ensureBalances(ctx context.Context, coins sdk.Coins) ([
 
 	// check if balance is below required
 	for _, coin := range coins {
-		balance := accountBalances.AmountOf(coin.Denom)
+		balance := a.balanceOf(coin.Denom)
 		diff := coin.Amount.Sub(balance)
 		if diff.IsPositive() {
 			// add x times the coin amount to the top up
@@ -207,24 +203,28 @@ func (a *accountService) sendCoins(coins sdk.Coins, toAddrStr string) error {
 	if err != nil {
 		return fmt.Errorf("failed to parse address: %w", err)
 	}
+
 	msg := banktypes.NewMsgSend(
 		a.account.GetAddress(),
 		toAddr,
 		coins,
 	)
+
 	_, err = a.client.BroadcastTx(a.accountName, msg)
 	return err
 }
 
-func (a *accountService) getAccountBalance(ctx context.Context, denom string) (*sdk.Coin, error) {
-	resp, err := banktypes.NewQueryClient(a.client.Context()).Balance(ctx, &banktypes.QueryBalanceRequest{
-		Address: a.account.GetAddress().String(),
-		Denom:   denom,
-	})
+func (a *accountService) balanceOf(denom string) sdk.Int {
+	return a.balances.AmountOf(denom)
+}
+
+func (a *accountService) refreshBalances(ctx context.Context) error {
+	balances, err := a.getAccountBalances(ctx)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("failed to get account balances: %w", err)
 	}
-	return resp.Balance, nil
+	a.balances = balances
+	return nil
 }
 
 func (a *accountService) getAccountBalances(ctx context.Context) (sdk.Coins, error) {
