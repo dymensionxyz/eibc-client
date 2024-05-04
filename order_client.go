@@ -142,9 +142,10 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		return nil, fmt.Errorf("failed to get whale address: %w", err)
 	}
 
-	logger.Info("refunding funds from extra bots to whale", zap.String("whale", whaleAddr.String()))
-
-	refundFromExtraBotsToWhale(ctx, config, botIdx, accs, whaleAddr.String(), config.GasFees, logger)
+	if !config.skipRefund {
+		logger.Info("refunding funds from extra bots to whale", zap.String("whale", whaleAddr.String()))
+		refundFromExtraBotsToWhale(ctx, config, botIdx, accs, whaleAddr.String(), config.GasFees, logger)
+	}
 
 	oc := &orderClient{
 		orderFetcher: ordFetcher,
