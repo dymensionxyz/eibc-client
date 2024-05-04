@@ -32,99 +32,96 @@ func newOrderFulfiller(accountSvc *accountService, client cosmosclient.Client, l
 
 func (ol *orderFulfiller) fulfillOrders(
 	ctx context.Context,
-	toFulfillOrders chan []*demandOrder,
-	failedOrderIDs chan<- []string,
+	newOrdersCh chan []*demandOrder,
+	unfulfilledOrderIDsCh chan<- []string,
 ) {
-
-	retryQueueCh := make(chan []*demandOrder, 1)
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case batch := <-retryQueueCh:
-				time.Sleep(1 * time.Second) // TODO: make it nicer
-				ol.logger.Debug(
-					"sending orders for retry",
-					zap.String("bot-name", ol.accountSvc.accountName),
-					zap.Int("count", len(batch)),
-				)
-				select {
-				case toFulfillOrders <- batch:
-				default:
-				}
-			}
-		}
-	}()
-
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case batch := <-toFulfillOrders:
-			coins := sdk.NewCoins()
-
-			for _, order := range batch {
-				coins = coins.Add(order.price...)
+		case batch := <-newOrdersCh:
+			if err := ol.processBatch(ctx, batch, unfulfilledOrderIDsCh); err != nil {
+				ol.logger.Error("failed to process batch", zap.Error(err))
 			}
-
-			ol.logger.Debug("ensuring balances for orders")
-
-			ensuredDenoms, err := ol.accountSvc.ensureBalances(ctx, coins)
-			if err != nil {
-				ol.logger.Error("failed to ensure balances", zap.Error(err))
-				return
-			}
-
-			if len(ensuredDenoms) > 0 {
-				ol.logger.Info("ensured balances for orders", zap.Strings("denoms", ensuredDenoms))
-			}
-
-			leftoverBatch := make([]*demandOrder, 0, len(batch))
-			ids := make([]string, 0, len(batch))
-
-		outer:
-			for _, order := range batch {
-				for _, price := range order.price {
-					if !slices.Contains(ensuredDenoms, price.Denom) {
-						leftoverBatch = append(leftoverBatch, order)
-						continue outer
-					}
-
-					ids = append(ids, order.id)
-				}
-			}
-
-			if len(ids) == 0 {
-				ol.logger.Debug(
-					"no orders to fulfill",
-					zap.String("bot-name", ol.accountSvc.accountName),
-					zap.Int("count", len(leftoverBatch)),
-				)
-				retryQueueCh <- leftoverBatch
-				continue
-			}
-
-			ol.logger.Info("fulfilling orders", zap.Int("count", len(ids)))
-
-			if err := ol.fulfillDemandOrders(ids...); err != nil {
-				ol.logger.Error("failed to fulfill orders", zap.Error(err), zap.Strings("ids", ids))
-				failedOrderIDs <- ids
-				continue
-			}
-
-			ol.logger.Info("orders fulfilled", zap.Int("count", len(ids)))
-
-			// mark the orders as fulfilled
-			/*for _, id := range ids {
-				latestHeight, err := ol.getLatestHeight(ctx)
-				if err != nil {
-					return fmt.Errorf("failed to get latest height: %w", err)
-				}
-				ol.demandOrders[id].fulfilledAtHeight = uint64(latestHeight)
-			}*/
 		}
 	}
+}
+
+func (ol *orderFulfiller) processBatch(ctx context.Context, batch []*demandOrder, unfulfilledOrderIDsCh chan<- []string) error {
+	defer func() {
+		if err := ol.accountSvc.refreshBalances(ctx); err != nil {
+			ol.logger.Error("failed to refresh balances", zap.Error(err))
+		}
+	}()
+
+	coins := sdk.NewCoins()
+
+	for _, order := range batch {
+		coins = coins.Add(order.price...)
+	}
+
+	ol.logger.Debug("ensuring balances for orders")
+
+	ensuredDenoms, err := ol.accountSvc.ensureBalances(coins)
+	if err != nil {
+		return fmt.Errorf("failed to ensure balances: %w", err)
+	}
+
+	if len(ensuredDenoms) > 0 {
+		ol.logger.Info("ensured balances for orders", zap.Strings("denoms", ensuredDenoms))
+	}
+
+	leftoverBatch := make([]string, 0, len(batch))
+	ids := make([]string, 0, len(batch))
+
+outer:
+	for _, order := range batch {
+		for _, price := range order.price {
+			if !slices.Contains(ensuredDenoms, price.Denom) {
+				leftoverBatch = append(leftoverBatch, order.id)
+				continue outer
+			}
+
+			ids = append(ids, order.id)
+		}
+	}
+
+	select {
+	case unfulfilledOrderIDsCh <- leftoverBatch:
+	default:
+	}
+
+	if len(ids) == 0 {
+		ol.logger.Debug(
+			"no orders to fulfill",
+			zap.String("bot-name", ol.accountSvc.accountName),
+			zap.Int("count", len(leftoverBatch)),
+		)
+		return nil
+	}
+
+	ol.logger.Info("fulfilling orders", zap.Int("count", len(ids)))
+
+	if err := ol.fulfillDemandOrders(ids...); err != nil {
+		select {
+		case unfulfilledOrderIDsCh <- ids:
+		default:
+		}
+		return fmt.Errorf("failed to fulfill orders: ids: %v; %w", ids, err)
+	}
+
+	ol.logger.Info("orders fulfilled", zap.Int("count", len(ids)))
+
+	return nil
+
+	// mark the orders as fulfilled
+	/*for _, id := range ids {
+		latestHeight, err := ol.getLatestHeight(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get latest height: %w", err)
+		}
+		ol.demandOrders[id].fulfilledAtHeight = uint64(latestHeight)
+	}*/
 }
 
 func (ol *orderFulfiller) fulfillDemandOrders(demandOrderID ...string) error {

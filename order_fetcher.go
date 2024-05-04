@@ -26,11 +26,11 @@ type orderFetcher struct {
 	indexerClient *http.Client
 	logger        *zap.Logger
 
-	batchSize      int
-	domu           sync.Mutex
-	newOrders      chan []*demandOrder
-	failedOrdersCh chan []string
-	demandOrders   map[string]struct{}
+	batchSize     int
+	domu          sync.Mutex
+	newOrders     chan []*demandOrder
+	unfulfilledCh chan []string
+	demandOrders  map[string]struct{}
 }
 
 func newOrderFetcher(
@@ -39,19 +39,19 @@ func newOrderFetcher(
 	indexerURL string,
 	batchSize int,
 	newOrders chan []*demandOrder,
-	failedOrdersCh chan []string,
+	unfulfilledCh chan []string,
 	logger *zap.Logger,
 ) *orderFetcher {
 	return &orderFetcher{
-		client:         client,
-		denomFetch:     denomFetch,
-		indexerURL:     indexerURL,
-		indexerClient:  &http.Client{Timeout: 30 * time.Second},
-		batchSize:      batchSize,
-		logger:         logger.With(zap.String("module", "order-fetcher")),
-		newOrders:      newOrders,
-		failedOrdersCh: failedOrdersCh,
-		demandOrders:   make(map[string]struct{}),
+		client:        client,
+		denomFetch:    denomFetch,
+		indexerURL:    indexerURL,
+		indexerClient: &http.Client{Timeout: 30 * time.Second},
+		batchSize:     batchSize,
+		logger:        logger.With(zap.String("module", "order-fetcher")),
+		newOrders:     newOrders,
+		unfulfilledCh: unfulfilledCh,
+		demandOrders:  make(map[string]struct{}),
 	}
 }
 
@@ -73,14 +73,14 @@ func (of *orderFetcher) doneOrders(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case ids := <-of.failedOrdersCh:
-				of.deleteFailedOrder(ids)
+			case ids := <-of.unfulfilledCh:
+				of.deleteOrders(ids)
 			}
 		}
 	}()
 }
 
-func (of *orderFetcher) deleteFailedOrder(ids []string) {
+func (of *orderFetcher) deleteOrders(ids []string) {
 	of.domu.Lock()
 	defer of.domu.Unlock()
 
