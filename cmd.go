@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -120,8 +121,7 @@ var balancesCmd = &cobra.Command{
 			log.Fatalf("failed to refresh whale account balances: %v", err)
 		}
 
-		fmt.Println()
-		fmt.Println("Bots Balances:")
+		totalBalances := sdk.NewCoins(oc.whale.accountSvc.balances...)
 
 		longestAmountStr := 0
 
@@ -132,10 +132,15 @@ var balancesCmd = &cobra.Command{
 			}
 		}
 
+		fmt.Println()
+		fmt.Println("Bots Balances:")
+
 		for _, b := range oc.bots {
 			if err := b.accountSvc.refreshBalances(cmd.Context()); err != nil {
 				log.Fatalf("failed to refresh bot account balances: %v", err)
 			}
+
+			totalBalances = totalBalances.Add(b.accountSvc.balances...)
 
 			for _, bal := range b.accountSvc.balances {
 				amtStr := formatAmount(bal.Amount.String())
@@ -145,31 +150,57 @@ var balancesCmd = &cobra.Command{
 			}
 		}
 
+		maxDen := 68
+
+		dividerItem := ""
+		for i := 0; i < longestAmountStr+maxDen+3; i++ {
+			dividerItem += "="
+		}
+
 		i := 0
 		for name, b := range oc.bots {
 			i++
 			accPref := fmt.Sprintf("%d. | '%s': ", i, name)
-			printAccountBalances(b.accountSvc, longestAmountStr, accPref)
+			printAccountBalances(b.accountSvc.balances, b.accountSvc.account.GetAddress().String(), longestAmountStr, maxDen, accPref, dividerItem)
 		}
 
 		fmt.Println()
-
 		fmt.Println("Whale Balances:")
 
 		accPref := fmt.Sprintf("Whale | '%s': ", oc.whale.accountSvc.accountName)
-		printAccountBalances(oc.whale.accountSvc, longestAmountStr, accPref)
+		printAccountBalances(oc.whale.accountSvc.balances, oc.whale.accountSvc.account.GetAddress().String(), longestAmountStr, maxDen, accPref, dividerItem)
 
 		fmt.Println()
+		fmt.Println("Total Balances:")
+		fmt.Println(dividerItem)
+
+		printBalances(totalBalances, longestAmountStr, maxDen)
 	},
 }
 
-func printAccountBalances(acc *accountService, maxBal int, accPref string) {
-	if acc.balances.IsZero() {
+func printAccountBalances(balances sdk.Coins, address string, maxBal, maxDen int, accPref, dividerItem string) {
+	if balances.IsZero() {
 		return
 	}
 
-	dividerBal, dividerDen, dividerAcc, dividerItem := "", "", "", ""
-	maxDen := 68
+	dividerAcc := ""
+
+	fmt.Printf("%s", dividerItem)
+
+	accLine := fmt.Sprintf("\n %s%s |", accPref, address)
+	for i := 0; i < len(accLine)-1; i++ {
+		dividerAcc += "-"
+	}
+	fmt.Printf("%s\n", accLine)
+	fmt.Printf("%s\n", dividerAcc)
+
+	printBalances(balances, maxBal, maxDen)
+
+	fmt.Println()
+}
+
+func printBalances(balances sdk.Coins, maxBal, maxDen int) {
+	dividerBal, dividerDen := "", ""
 
 	for i := 0; i < maxBal; i++ {
 		dividerBal += "-"
@@ -179,28 +210,13 @@ func printAccountBalances(acc *accountService, maxBal int, accPref string) {
 		dividerDen += "-"
 	}
 
-	for i := 0; i < maxBal+maxDen+3; i++ {
-		dividerItem += "="
-	}
-
-	fmt.Printf("%s", dividerItem)
-
-	accLine := fmt.Sprintf("\n %s%s |", accPref, acc.account.GetAddress().String())
-	for i := 0; i < len(accLine)-1; i++ {
-		dividerAcc += "-"
-	}
-	fmt.Printf("%s\n", accLine)
-	fmt.Printf("%s\n", dividerAcc)
-
 	fmt.Printf("%*s | Denom\n", maxBal, "Amount")
 	fmt.Printf("%*s | %s\n", maxBal, dividerBal, dividerDen)
 
-	for _, bl := range acc.balances {
+	for _, bl := range balances {
 		amtStr := formatAmount(bl.Amount.String())
 		fmt.Printf("%*s | %-s\n", maxBal, amtStr, bl.Denom)
 	}
-
-	fmt.Println()
 }
 
 func formatAmount(numStr string) string {
