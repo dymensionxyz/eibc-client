@@ -86,13 +86,15 @@ outer:
 		}
 	}
 
-	select {
-	case unfulfilledOrderIDsCh <- leftoverBatch:
-	default:
+	if len(leftoverBatch) > 0 {
+		select {
+		case unfulfilledOrderIDsCh <- leftoverBatch:
+		default:
+		}
 	}
 
 	if len(ids) == 0 {
-		ol.logger.Debug(
+		ol.logger.Info(
 			"no orders to fulfill",
 			zap.String("bot-name", ol.accountSvc.accountName),
 			zap.Int("count", len(leftoverBatch)),

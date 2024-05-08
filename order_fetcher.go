@@ -26,6 +26,8 @@ type orderFetcher struct {
 	indexerClient *http.Client
 	logger        *zap.Logger
 
+	denomsWhitelist map[string]struct{}
+
 	batchSize     int
 	domu          sync.Mutex
 	newOrders     chan []*demandOrder
@@ -40,18 +42,20 @@ func newOrderFetcher(
 	batchSize int,
 	newOrders chan []*demandOrder,
 	unfulfilledCh chan []string,
+	denomsWhitelist map[string]struct{},
 	logger *zap.Logger,
 ) *orderFetcher {
 	return &orderFetcher{
-		client:        client,
-		denomFetch:    denomFetch,
-		indexerURL:    indexerURL,
-		indexerClient: &http.Client{Timeout: 30 * time.Second},
-		batchSize:     batchSize,
-		logger:        logger.With(zap.String("module", "order-fetcher")),
-		newOrders:     newOrders,
-		unfulfilledCh: unfulfilledCh,
-		demandOrders:  make(map[string]struct{}),
+		client:          client,
+		denomFetch:      denomFetch,
+		indexerURL:      indexerURL,
+		indexerClient:   &http.Client{Timeout: 30 * time.Second},
+		batchSize:       batchSize,
+		logger:          logger.With(zap.String("module", "order-fetcher")),
+		denomsWhitelist: denomsWhitelist,
+		newOrders:       newOrders,
+		unfulfilledCh:   unfulfilledCh,
+		demandOrders:    make(map[string]struct{}),
 	}
 }
 
@@ -99,12 +103,15 @@ func (of *orderFetcher) refreshPendingDemandOrders(ctx context.Context) error {
 
 	unfulfilledOrders := make([]*demandOrder, 0, len(orders))
 
-	// TODO: maybe check here which denoms the whale can provide funds for
-
 	of.domu.Lock()
 	for _, d := range orders {
 		// if already in the map, means fulfilled or fulfilling
 		if _, found := of.demandOrders[d.EibcOrderId]; found {
+			continue
+		}
+
+		// exclude orders that are not in the whitelist
+		if _, found := of.denomsWhitelist[d.Denom]; !found {
 			continue
 		}
 
@@ -170,19 +177,27 @@ func (of *orderFetcher) enqueueEventOrders(res tmtypes.ResultEvent) {
 		if _, found := of.demandOrders[id]; found {
 			continue
 		}
-		// otherwise, save to prevent duplicates
-		of.demandOrders[id] = struct{}{}
 
 		price, err := sdk.ParseCoinNormalized(prices[i])
 		if err != nil {
 			of.logger.Error("failed to parse price", zap.Error(err))
 			continue
 		}
+
+		// exclude orders that are not in the whitelist
+		if _, found := of.denomsWhitelist[price.Denom]; !found {
+			continue
+		}
+
 		fee, err := sdk.ParseCoinNormalized(fees[i])
 		if err != nil {
 			of.logger.Error("failed to parse fee", zap.Error(err))
 			continue
 		}
+
+		// otherwise, save to prevent duplicates
+		of.demandOrders[id] = struct{}{}
+
 		order := &demandOrder{
 			id:    id,
 			price: sdk.NewCoins(price),
@@ -246,7 +261,6 @@ func (of *orderFetcher) getDemandOrdersFromIndexer(ctx context.Context) ([]Order
 	}
 
 	var orders []Order
-
 	// parse the time format of "1714742916108" into time.Time and sort by time
 	for _, order := range res.Data.IbcTransferDetails.Nodes {
 		if order.Time == "" {

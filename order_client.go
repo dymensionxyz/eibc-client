@@ -52,6 +52,11 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		return nil, fmt.Errorf("failed to create cosmos client: %w", err)
 	}
 
+	denomsWhitelist := make(map[string]struct{}, len(config.Whale.AllowedBalanceThresholds))
+	for denom := range config.Whale.AllowedBalanceThresholds {
+		denomsWhitelist[denom] = struct{}{}
+	}
+
 	denomFetch := newDenomFetcher(fetcherCosmosClient)
 	orderCh := make(chan []*demandOrder, newOrderBufferSize)
 	unfulfilledCh := make(chan []string, newOrderBufferSize) // TODO: make buffer size configurable
@@ -62,6 +67,7 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		config.Bots.MaxOrdersPerTx,
 		orderCh,
 		unfulfilledCh,
+		denomsWhitelist,
 		logger,
 	)
 
