@@ -15,6 +15,7 @@ import (
 type Config struct {
 	HomeDir                      string        `mapstructure:"home_dir"`
 	NodeAddress                  string        `mapstructure:"node_address"`
+	DBPath                       string        `mapstructure:"db_path"`
 	GasPrices                    string        `mapstructure:"gas_prices"`
 	GasFees                      string        `mapstructure:"gas_fees"`
 	MinimumGasBalance            string        `mapstructure:"minimum_gas_balance"`
@@ -54,6 +55,7 @@ type slackConfig struct {
 
 const (
 	defaultNodeAddress       = "http://localhost:36657"
+	defaultDBPath            = "mongodb://localhost:27017"
 	defaultIndexerURL        = "http://44.206.211.230:3000/"
 	hubAddressPrefix         = "dym"
 	pubKeyPrefix             = "pub"
@@ -97,6 +99,7 @@ func initConfig() {
 	viper.SetDefault("bots.number_of_bots", defaultNumberOfBots)
 	viper.SetDefault("bots.top_up_factor", defaultBotTopUpFactor)
 	viper.SetDefault("node_address", defaultNodeAddress)
+	viper.SetDefault("db_path", defaultDBPath)
 	viper.SetDefault("gas_fees", defaultGasFees)
 	viper.SetDefault("minimum_gas_balance", defaultMinimumGasBalance)
 	viper.SetDefault("max_orders_per_tx", defaultMaxOrdersPerTx)

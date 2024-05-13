@@ -4,10 +4,15 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
+type orderBatch struct {
+	orders    []*demandOrder
+	fulfiller string
+}
+
 type demandOrder struct {
-	id    string
-	price sdk.Coins
-	fee   sdk.Coins
+	id     string
+	amount sdk.Coins
+	status string
 }
 
 type account struct {

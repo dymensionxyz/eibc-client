@@ -11,16 +11,19 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
+
+	"github.com/dymensionxyz/order-client/store"
 )
 
 type orderClient struct {
 	logger  *zap.Logger
 	config  Config
-	bots    map[string]*bot
+	bots    map[string]*orderFulfiller
 	orderCh chan []*demandOrder
 	whale   *whale
 
 	orderFetcher *orderFetcher
+	orderTracker *orderTracker
 }
 
 func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
@@ -54,21 +57,29 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 
 	denomFetch := newDenomFetcher(fetcherCosmosClient)
 	orderCh := make(chan []*demandOrder, newOrderBufferSize)
-	unfulfilledCh := make(chan []string, newOrderBufferSize) // TODO: make buffer size configurable
+
+	db, err := store.NewDB(ctx, config.DBPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create db: %w", err)
+	}
+
+	fulfilledOrdersCh := make(chan *orderBatch, newOrderBufferSize) // TODO: make buffer size configurable
+	bstore := store.NewBotStore(db)
+	ordTracker := newOrderTracker(fetcherCosmosClient, bstore, fulfilledOrdersCh, logger)
+
 	ordFetcher := newOrderFetcher(
 		fetcherCosmosClient,
 		denomFetch,
+		ordTracker,
 		config.IndexerURL,
 		config.Bots.MaxOrdersPerTx,
 		orderCh,
-		unfulfilledCh,
 		logger,
 	)
 
 	topUpCh := make(chan topUpRequest, config.Bots.NumberOfBots) // TODO: make buffer size configurable
-	bin := "dymd"                                                // TODO: from config
-
 	slackClient := newSlacker(config.SlackConfig, logger)
+	bin := "dymd" // TODO: from config
 
 	whaleSvc, err := buildWhale(
 		ctx,
@@ -109,7 +120,7 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	}
 
 	// create bots
-	bots := make(map[string]*bot)
+	bots := make(map[string]*orderFulfiller)
 
 	var botIdx int
 	for botIdx = range config.Bots.NumberOfBots {
@@ -118,17 +129,19 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 			accs[botIdx],
 			logger,
 			config.Bots,
+			bstore,
 			config.NodeAddress,
 			config.GasFees,
 			config.GasPrices,
 			minGasBalance,
-			unfulfilledCh,
+			orderCh,
+			fulfilledOrdersCh,
 			topUpCh,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create bot: %w", err)
 		}
-		bots[b.name] = b
+		bots[b.accountSvc.accountName] = b
 	}
 
 	// TODO: move to account.go
@@ -144,10 +157,20 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 
 	logger.Info("refunding funds from extra bots to whale", zap.String("whale", whaleAddr.String()))
 
-	refundFromExtraBotsToWhale(ctx, config, botIdx, accs, whaleAddr.String(), config.GasFees, logger)
+	refundFromExtraBotsToWhale(
+		ctx,
+		bstore,
+		config,
+		botIdx,
+		accs,
+		whaleAddr.String(),
+		config.GasFees,
+		logger,
+	)
 
 	oc := &orderClient{
 		orderFetcher: ordFetcher,
+		orderTracker: ordTracker,
 		bots:         bots,
 		whale:        whaleSvc,
 		orderCh:      orderCh,
@@ -160,6 +183,9 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 
 func (oc *orderClient) start(ctx context.Context) error {
 	oc.logger.Info("starting demand order fetcher...")
+	if err := oc.orderFetcher.client.RPC.Start(); err != nil {
+		return fmt.Errorf("failed to start rpc client: %w", err)
+	}
 
 	// start order fetcher
 	if err := oc.orderFetcher.start(ctx, oc.config.OrderRefreshInterval, oc.config.OrderCleanupInterval); err != nil {
@@ -170,9 +196,9 @@ func (oc *orderClient) start(ctx context.Context) error {
 	if err := oc.whale.start(ctx); err != nil {
 		return fmt.Errorf("failed to start whale service: %w", err)
 	}
-	// oc.disputePeriodUpdater(ctx)
 
 	oc.logger.Info("starting bots...")
+
 	// start bots
 	for _, b := range oc.bots {
 		go func() {
@@ -182,58 +208,19 @@ func (oc *orderClient) start(ctx context.Context) error {
 		}()
 	}
 
-	for batch := range oc.orderCh {
-		botBatches := make(map[string][]*demandOrder)
-		// redistribute the batch to bots
-		// according to their balances for order prices
-		for _, o := range batch {
-			if len(o.price) == 0 {
-				continue
-			}
-
-			b := oc.findBotWithHigestOrderBalance(o.price[0]) // for now we should have only one denom per order
-			botBatches[b.name] = append(botBatches[b.name], o)
-		}
-
-		for name, orders := range botBatches {
-			oc.bots[name].newOrders <- orders
-		}
+	if err := oc.orderTracker.start(ctx); err != nil {
+		return fmt.Errorf("failed to start order tracker: %w", err)
 	}
+
+	// TODO: block more nicely
+	<-make(chan struct{})
 
 	return nil
 }
 
-func (oc *orderClient) findBotWithHigestOrderBalance(orderPrice sdk.Coin) *bot {
-	var (
-		minBalanceDiff sdk.Int
-		highestBot     *bot
-	)
-
-	for _, b := range oc.bots {
-		// make sure we don't return nil
-		if highestBot == nil {
-			highestBot = b
-			minBalanceDiff = orderPrice.Amount
-			continue
-		}
-
-		balance := b.accountSvc.balanceOf(orderPrice.Denom)
-
-		if !balance.IsPositive() {
-			continue
-		}
-
-		if diff := balance.Sub(orderPrice.Amount); diff.LT(minBalanceDiff) {
-			minBalanceDiff = diff
-			highestBot = b
-		}
-	}
-
-	return highestBot
-}
-
 func refundFromExtraBotsToWhale(
 	ctx context.Context,
+	store accountStore,
 	config Config,
 	startBotIdx int,
 	accs []string,
@@ -256,17 +243,18 @@ func refundFromExtraBotsToWhale(
 			accs[startBotIdx],
 			logger,
 			config.Bots,
+			store,
 			config.NodeAddress,
 			config.GasFees,
 			config.GasPrices,
-			sdk.Coin{}, nil, nil,
+			sdk.Coin{}, nil, nil, nil,
 		)
 		if err != nil {
 			logger.Error("failed to create bot", zap.Error(err))
 			continue
 		}
 
-		if err := b.accountSvc.refreshBalances(ctx); err != nil {
+		if err := b.accountSvc.updateFunds(ctx); err != nil {
 			logger.Error("failed to get bot balances", zap.Error(err))
 			continue
 		}
@@ -305,11 +293,13 @@ func buildBot(
 	name string,
 	logger *zap.Logger,
 	config botConfig,
+	store accountStore,
 	nodeAddress, gasFees, gasPrices string,
 	minimumGasBalance sdk.Coin,
-	unfulfilledCh chan []string,
+	newOrderCh chan []*demandOrder,
+	fulfilledCh chan *orderBatch,
 	topUpCh chan topUpRequest,
-) (*bot, error) {
+) (*orderFulfiller, error) {
 	clientCfg := clientConfig{
 		homeDir:        config.KeyringDir,
 		keyringBackend: config.KeyringBackend,
@@ -325,6 +315,7 @@ func buildBot(
 
 	accountSvc, err := newAccountService(
 		cosmosClient,
+		store,
 		logger,
 		name,
 		minimumGasBalance,
@@ -335,10 +326,7 @@ func buildBot(
 		return nil, fmt.Errorf("failed to create account service for bot: %s;err: %w", name, err)
 	}
 
-	fulfiller := newOrderFulfiller(accountSvc, cosmosClient, logger)
-	b := newBot(name, fulfiller, unfulfilledCh, logger)
-
-	return b, nil
+	return newOrderFulfiller(accountSvc, newOrderCh, fulfilledCh, cosmosClient, logger), nil
 }
 
 func buildWhale(
@@ -374,7 +362,14 @@ func buildWhale(
 		return nil, fmt.Errorf("failed to create cosmos client for whale: %w", err)
 	}
 
-	accountSvc, err := newAccountService(cosmosClient, logger, config.AccountName, minimumGasBalance, topUpCh)
+	accountSvc, err := newAccountService(
+		cosmosClient,
+		nil, // whale doesn't need a store for now
+		logger,
+		config.AccountName,
+		minimumGasBalance,
+		topUpCh,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create account service for whale: %w", err)
 	}

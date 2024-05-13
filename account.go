@@ -17,10 +17,13 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
+
+	"github.com/dymensionxyz/order-client/store"
 )
 
 type accountService struct {
 	client            cosmosclient.Client
+	store             accountStore
 	logger            *zap.Logger
 	account           client.Account
 	balances          sdk.Coins
@@ -28,6 +31,11 @@ type accountService struct {
 	accountName       string
 	topUpFactor       uint64
 	topUpCh           chan<- topUpRequest
+}
+
+type accountStore interface {
+	GetBot(ctx context.Context, address string, _ ...store.BotOption) (*store.Bot, error)
+	SaveBot(ctx context.Context, bot *store.Bot) error
 }
 
 const noRecordsFound = "No records were found in keyring\n"
@@ -42,6 +50,7 @@ func withTopUpFactor(topUpFactor uint64) option {
 
 func newAccountService(
 	client cosmosclient.Client,
+	store accountStore,
 	logger *zap.Logger,
 	accountName string,
 	minimumGasBalance sdk.Coin,
@@ -50,6 +59,7 @@ func newAccountService(
 ) (*accountService, error) {
 	a := &accountService{
 		client:            client,
+		store:             store,
 		logger:            logger.With(zap.String("module", "account-service")),
 		accountName:       accountName,
 		minimumGasBalance: minimumGasBalance,
@@ -218,12 +228,63 @@ func (a *accountService) balanceOf(denom string) sdk.Int {
 	return a.balances.AmountOf(denom)
 }
 
-func (a *accountService) refreshBalances(ctx context.Context) error {
+type fundsOption func(*fundsRequest)
+
+type fundsRequest struct {
+	rewards []string
+}
+
+func addRewards(rewards ...string) fundsOption {
+	return func(r *fundsRequest) {
+		r.rewards = rewards
+	}
+}
+
+func (a *accountService) updateFunds(ctx context.Context, opts ...fundsOption) error {
 	balances, err := a.getAccountBalances(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get account balances: %w", err)
 	}
 	a.balances = balances
+
+	b, err := a.store.GetBot(ctx, a.account.GetAddress().String())
+	if err != nil {
+		return fmt.Errorf("failed to get bot: %w", err)
+	}
+	if b == nil {
+		b = &store.Bot{
+			Address: a.account.GetAddress().String(),
+		}
+	}
+
+	b.Balances = make([]string, 0, len(balances))
+	for _, balance := range balances {
+		b.Balances = append(b.Balances, balance.String())
+	}
+
+	pendingRewards := b.PendingRewards.ToCoins()
+
+	req := &fundsRequest{}
+	for _, opt := range opts {
+		opt(req)
+	}
+
+	if len(req.rewards) > 0 {
+		for _, r := range req.rewards {
+			pr, err := sdk.ParseCoinNormalized(r)
+			if err != nil {
+				return fmt.Errorf("failed to parse reward coin: %w", err)
+			}
+			pendingRewards = pendingRewards.Add(pr)
+		}
+
+		b.PendingRewards = store.CoinsToStrings(pendingRewards)
+	}
+
+	if err := a.store.SaveBot(ctx, b); err != nil {
+		return fmt.Errorf("failed to update bot: %w", err)
+	}
+
 	return nil
 }
 
