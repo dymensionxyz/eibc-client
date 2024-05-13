@@ -29,6 +29,7 @@ type Config struct {
 
 	LogLevel    string      `mapstructure:"log_level"`
 	SlackConfig slackConfig `mapstructure:"slack"`
+	skipRefund  bool
 }
 
 type botConfig struct {
