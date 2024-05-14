@@ -106,14 +106,6 @@ var balancesCmd = &cobra.Command{
 
 		config.skipRefund = true
 
-		if all, _ := cmd.Flags().GetBool("all"); all {
-			accs, err := getBotAccounts("dymd", config.Bots.KeyringDir)
-			if err != nil {
-				log.Fatalf("failed to get bot accounts: %v", err)
-			}
-			config.Bots.NumberOfBots = len(accs)
-		}
-
 		oc, err := newOrderClient(cmd.Context(), config)
 		if err != nil {
 			log.Fatalf("failed to create order client: %v", err)

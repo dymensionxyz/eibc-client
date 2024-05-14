@@ -13,16 +13,11 @@ import (
 )
 
 type Config struct {
-	HomeDir                      string        `mapstructure:"home_dir"`
-	NodeAddress                  string        `mapstructure:"node_address"`
-	DBPath                       string        `mapstructure:"db_path"`
-	GasPrices                    string        `mapstructure:"gas_prices"`
-	GasFees                      string        `mapstructure:"gas_fees"`
-	MinimumGasBalance            string        `mapstructure:"minimum_gas_balance"`
-	OrderRefreshInterval         time.Duration `mapstructure:"order_refresh_interval"`
-	OrderCleanupInterval         time.Duration `mapstructure:"order_cleanup_interval"`
-	DisputePeriodRefreshInterval time.Duration `mapstructure:"dispute_period_refresh_interval"`
-	IndexerURL                   string        `mapstructure:"indexer_url"`
+	HomeDir      string             `mapstructure:"home_dir"`
+	NodeAddress  string             `mapstructure:"node_address"`
+	DBPath       string             `mapstructure:"db_path"`
+	Gas          GasConfig          `mapstructure:"gas"`
+	OrderPolling OrderPollingConfig `mapstructure:"order_polling"`
 
 	Whale whaleConfig `mapstructure:"whale"`
 	Bots  botConfig   `mapstructure:"bots"`
@@ -30,6 +25,18 @@ type Config struct {
 	LogLevel    string      `mapstructure:"log_level"`
 	SlackConfig slackConfig `mapstructure:"slack"`
 	skipRefund  bool
+}
+
+type OrderPollingConfig struct {
+	IndexerURL string        `mapstructure:"indexer_url"`
+	Interval   time.Duration `mapstructure:"interval"`
+	Enabled    bool          `mapstructure:"enabled"`
+}
+
+type GasConfig struct {
+	Prices            string `mapstructure:"prices"`
+	Fees              string `mapstructure:"fees"`
+	MinimumGasBalance string `mapstructure:"minimum_gas_balance"`
 }
 
 type botConfig struct {
@@ -57,7 +64,6 @@ type slackConfig struct {
 const (
 	defaultNodeAddress       = "http://localhost:36657"
 	defaultDBPath            = "mongodb://localhost:27017"
-	defaultIndexerURL        = "http://44.206.211.230:3000/"
 	hubAddressPrefix         = "dym"
 	pubKeyPrefix             = "pub"
 	defaultLogLevel          = "info"
@@ -67,15 +73,13 @@ const (
 	defaultMinimumGasBalance = "40000000000" + defaultHubDenom
 	testKeyringBackend       = "test"
 
-	botNamePrefix                       = "bot-"
-	whaleAccountName                    = "client"
-	defaultBotTopUpFactor               = 2
-	defaultNumberOfBots                 = 1
-	newOrderBufferSize                  = 100
-	defaultMaxOrdersPerTx               = 1
-	defaultOrderRefreshInterval         = 30 * time.Second
-	defaultOrderCleanupInterval         = 3600 * time.Second
-	defaultDisputePeriodRefreshInterval = 10 * time.Hour
+	botNamePrefix               = "bot-"
+	whaleAccountName            = "client"
+	defaultBotTopUpFactor       = 2
+	defaultNumberOfBots         = 1
+	newOrderBufferSize          = 100
+	defaultMaxOrdersPerTx       = 1
+	defaultOrderRefreshInterval = 30 * time.Second
 )
 
 var defaultBalanceThresholds = map[string]string{defaultHubDenom: "1000000000000"}
@@ -89,28 +93,31 @@ func initConfig() {
 	}
 	defaultHomeDir := home + "/.order-client"
 
-	viper.SetDefault("home_dir", defaultHomeDir)
 	viper.SetDefault("log_level", defaultLogLevel)
+	viper.SetDefault("home_dir", defaultHomeDir)
+	viper.SetDefault("node_address", defaultNodeAddress)
+	viper.SetDefault("db_path", defaultDBPath)
+
+	viper.SetDefault("order_polling.interval", defaultOrderRefreshInterval)
+	viper.SetDefault("order_polling.enabled", false)
+
+	viper.SetDefault("gas.fees", defaultGasFees)
+	viper.SetDefault("gas.minimum_gas_balance", defaultMinimumGasBalance)
+
 	viper.SetDefault("whale.account_name", whaleAccountName)
 	viper.SetDefault("whale.keyring_backend", testKeyringBackend)
 	viper.SetDefault("whale.allowed_balance_thresholds", defaultBalanceThresholds)
 	viper.SetDefault("whale.keyring_dir", defaultHomeDir)
+
 	viper.SetDefault("bots.keyring_backend", testKeyringBackend)
 	viper.SetDefault("bots.keyring_dir", defaultHomeDir)
 	viper.SetDefault("bots.number_of_bots", defaultNumberOfBots)
 	viper.SetDefault("bots.top_up_factor", defaultBotTopUpFactor)
-	viper.SetDefault("node_address", defaultNodeAddress)
-	viper.SetDefault("db_path", defaultDBPath)
-	viper.SetDefault("gas_fees", defaultGasFees)
-	viper.SetDefault("minimum_gas_balance", defaultMinimumGasBalance)
-	viper.SetDefault("max_orders_per_tx", defaultMaxOrdersPerTx)
-	viper.SetDefault("order_refresh_interval", defaultOrderRefreshInterval)
-	viper.SetDefault("order_cleanup_interval", defaultOrderCleanupInterval)
-	viper.SetDefault("dispute_period_refresh_interval", defaultDisputePeriodRefreshInterval)
+	viper.SetDefault("bots.max_orders_per_tx", defaultMaxOrdersPerTx)
+
 	viper.SetDefault("slack.enabled", false)
 	viper.SetDefault("slack.app_token", "<your-slack-app-token>")
 	viper.SetDefault("slack.channel_id", "<your-slack-channel-id>")
-	viper.SetDefault("indexer_url", defaultIndexerURL)
 
 	viper.SetConfigType("yaml")
 	if cfgFile != "" {

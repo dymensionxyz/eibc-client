@@ -22,7 +22,8 @@ type orderClient struct {
 	orderCh chan []*demandOrder
 	whale   *whale
 
-	orderFetcher *orderFetcher
+	orderEventer *orderEventer
+	orderPoller  *orderPoller
 	orderTracker *orderTracker
 }
 
@@ -37,7 +38,7 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 
 	defer logger.Sync() // Ensure all logs are written
 
-	minGasBalance, err := sdk.ParseCoinNormalized(config.MinimumGasBalance)
+	minGasBalance, err := sdk.ParseCoinNormalized(config.Gas.MinimumGasBalance)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse minimum gas balance: %w", err)
 	}
@@ -46,16 +47,16 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	fetcherClientCfg := clientConfig{
 		homeDir:        config.Bots.KeyringDir,
 		nodeAddress:    config.NodeAddress,
-		gasFees:        config.GasFees,
-		gasPrices:      config.GasPrices,
+		gasFees:        config.Gas.Fees,
+		gasPrices:      config.Gas.Prices,
 		keyringBackend: config.Bots.KeyringBackend,
 	}
+
 	fetcherCosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(fetcherClientCfg)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cosmos client: %w", err)
 	}
 
-	denomFetch := newDenomFetcher(fetcherCosmosClient)
 	orderCh := make(chan []*demandOrder, newOrderBufferSize)
 
 	db, err := store.NewDB(ctx, config.DBPath)
@@ -67,11 +68,9 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	bstore := store.NewBotStore(db)
 	ordTracker := newOrderTracker(fetcherCosmosClient, bstore, fulfilledOrdersCh, logger)
 
-	ordFetcher := newOrderFetcher(
+	eventer := newOrderEventer(
 		fetcherCosmosClient,
-		denomFetch,
 		ordTracker,
-		config.IndexerURL,
 		config.Bots.MaxOrdersPerTx,
 		orderCh,
 		logger,
@@ -79,7 +78,6 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 
 	topUpCh := make(chan topUpRequest, config.Bots.NumberOfBots) // TODO: make buffer size configurable
 	slackClient := newSlacker(config.SlackConfig, logger)
-	bin := "dymd" // TODO: from config
 
 	whaleSvc, err := buildWhale(
 		ctx,
@@ -87,8 +85,8 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		config.Whale,
 		slackClient,
 		config.NodeAddress,
-		config.GasFees,
-		config.GasPrices,
+		config.Gas.Fees,
+		config.Gas.Prices,
 		minGasBalance,
 		topUpCh,
 	)
@@ -96,27 +94,17 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		return nil, fmt.Errorf("failed to create whale: %w", err)
 	}
 
-	accs, err := getBotAccounts(bin, config.Bots.KeyringDir)
+	botClientCfg := clientConfig{
+		homeDir:        config.Bots.KeyringDir,
+		keyringBackend: config.Bots.KeyringBackend,
+		nodeAddress:    config.NodeAddress,
+		gasFees:        config.Gas.Fees,
+		gasPrices:      config.Gas.Prices,
+	}
+
+	accs, err := addBotAccounts(ctx, config.Bots.NumberOfBots, botClientCfg, logger)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get bot accounts: %w", err)
-	}
-
-	numFoundBots := len(accs)
-
-	botsAccountsToCreate := max(0, config.Bots.NumberOfBots) - numFoundBots
-	if botsAccountsToCreate > 0 {
-		logger.Info("creating bot accounts", zap.Int("accounts", botsAccountsToCreate))
-	}
-
-	newNames, err := createBotAccounts(bin, config.Bots.KeyringDir, botsAccountsToCreate)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create bot accounts: %w", err)
-	}
-
-	accs = slices.Concat(accs, newNames)
-
-	if len(accs) < config.Bots.NumberOfBots {
-		return nil, fmt.Errorf("expected %d bot accounts, got %d", config.Bots.NumberOfBots, len(accs))
+		return nil, err
 	}
 
 	// create bots
@@ -129,10 +117,8 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 			accs[botIdx],
 			logger,
 			config.Bots,
+			botClientCfg,
 			bstore,
-			config.NodeAddress,
-			config.GasFees,
-			config.GasPrices,
 			minGasBalance,
 			orderCh,
 			fulfilledOrdersCh,
@@ -157,7 +143,6 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 
 	if !config.skipRefund {
 		logger.Info("refunding funds from extra bots to whale", zap.String("whale", whaleAddr.String()))
-
 		refundFromExtraBotsToWhale(
 			ctx,
 			bstore,
@@ -165,13 +150,13 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 			botIdx,
 			accs,
 			whaleAddr.String(),
-			config.GasFees,
+			config.Gas.Fees,
 			logger,
 		)
 	}
 
 	oc := &orderClient{
-		orderFetcher: ordFetcher,
+		orderEventer: eventer,
 		orderTracker: ordTracker,
 		bots:         bots,
 		whale:        whaleSvc,
@@ -180,18 +165,35 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		logger:       logger,
 	}
 
+	if config.OrderPolling.Enabled {
+		oc.orderPoller = newOrderPoller(
+			fetcherCosmosClient,
+			ordTracker,
+			config.OrderPolling,
+			config.Bots.MaxOrdersPerTx,
+			orderCh,
+			logger,
+		)
+	}
+
 	return oc, nil
 }
 
 func (oc *orderClient) start(ctx context.Context) error {
 	oc.logger.Info("starting demand order fetcher...")
-	if err := oc.orderFetcher.client.RPC.Start(); err != nil {
+	if err := oc.orderEventer.client.RPC.Start(); err != nil {
 		return fmt.Errorf("failed to start rpc client: %w", err)
 	}
 
 	// start order fetcher
-	if err := oc.orderFetcher.start(ctx, oc.config.OrderRefreshInterval, oc.config.OrderCleanupInterval); err != nil {
+	if err := oc.orderEventer.start(ctx); err != nil {
 		return fmt.Errorf("failed to subscribe to demand orders: %w", err)
+	}
+
+	// start order polling
+	if oc.orderPoller != nil {
+		oc.logger.Info("starting order polling...")
+		oc.orderPoller.start(ctx)
 	}
 
 	// start whale service
@@ -220,6 +222,37 @@ func (oc *orderClient) start(ctx context.Context) error {
 	return nil
 }
 
+func addBotAccounts(ctx context.Context, numBots int, botConfig clientConfig, logger *zap.Logger) ([]string, error) {
+	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(botConfig)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cosmos client for bot: %w", err)
+	}
+
+	accs, err := getBotAccounts(cosmosClient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get bot accounts: %w", err)
+	}
+
+	numFoundBots := len(accs)
+
+	botsAccountsToCreate := max(0, numBots) - numFoundBots
+	if botsAccountsToCreate > 0 {
+		logger.Info("creating bot accounts", zap.Int("accounts", botsAccountsToCreate))
+	}
+
+	newNames, err := createBotAccounts(cosmosClient, botsAccountsToCreate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create bot accounts: %w", err)
+	}
+
+	accs = slices.Concat(accs, newNames)
+
+	if len(accs) < numBots {
+		return nil, fmt.Errorf("expected %d bot accounts, got %d", numBots, len(accs))
+	}
+	return accs, nil
+}
+
 func refundFromExtraBotsToWhale(
 	ctx context.Context,
 	store accountStore,
@@ -238,6 +271,14 @@ func refundFromExtraBotsToWhale(
 		return
 	}
 
+	botClientCfg := clientConfig{
+		homeDir:        config.Bots.KeyringDir,
+		keyringBackend: config.Bots.KeyringBackend,
+		nodeAddress:    config.NodeAddress,
+		gasFees:        config.Gas.Fees,
+		gasPrices:      config.Gas.Prices,
+	}
+
 	// return funds from extra bots to whale
 	for ; startBotIdx < len(accs); startBotIdx++ {
 		b, err := buildBot(
@@ -245,10 +286,8 @@ func refundFromExtraBotsToWhale(
 			accs[startBotIdx],
 			logger,
 			config.Bots,
+			botClientCfg,
 			store,
-			config.NodeAddress,
-			config.GasFees,
-			config.GasPrices,
 			sdk.Coin{}, nil, nil, nil,
 		)
 		if err != nil {
@@ -295,21 +334,13 @@ func buildBot(
 	name string,
 	logger *zap.Logger,
 	config botConfig,
+	clientCfg clientConfig,
 	store accountStore,
-	nodeAddress, gasFees, gasPrices string,
 	minimumGasBalance sdk.Coin,
 	newOrderCh chan []*demandOrder,
 	fulfilledCh chan *orderBatch,
 	topUpCh chan topUpRequest,
 ) (*orderFulfiller, error) {
-	clientCfg := clientConfig{
-		homeDir:        config.KeyringDir,
-		keyringBackend: config.KeyringBackend,
-		nodeAddress:    nodeAddress,
-		gasFees:        gasFees,
-		gasPrices:      gasPrices,
-	}
-
 	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(clientCfg)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cosmos client for bot: %s;err: %w", name, err)

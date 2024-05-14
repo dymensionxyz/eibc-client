@@ -39,8 +39,7 @@ func newOrderFulfiller(
 }
 
 func (ol *orderFulfiller) start(ctx context.Context) error {
-	if err := ol.accountSvc.
-		updateFunds(ctx); err != nil {
+	if err := ol.accountSvc.updateFunds(ctx); err != nil {
 		return fmt.Errorf("failed to update account funds: %w", err)
 	}
 

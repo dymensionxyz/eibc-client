@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os/exec"
 	"slices"
 	"strings"
 
@@ -37,8 +35,6 @@ type accountStore interface {
 	GetBot(ctx context.Context, address string, _ ...store.BotOption) (*store.Bot, error)
 	SaveBot(ctx context.Context, bot *store.Bot) error
 }
-
-const noRecordsFound = "No records were found in keyring\n"
 
 type option func(*accountService)
 
@@ -77,24 +73,19 @@ func newAccountService(
 	return a, nil
 }
 
-func addAccount(bin, name, homeDir string) (string, error) {
-	cmd := exec.Command(
-		bin, "keys", "add",
-		name, "--keyring-backend", "test",
-		"--keyring-dir", homeDir,
-	)
-
-	output, err := cmd.Output()
-	if eerr, ok := err.(*exec.ExitError); ok {
-		output = eerr.Stderr
+func addAccount(client cosmosclient.Client, name string) error {
+	_, err := client.AccountRegistry.GetByName(name)
+	if err == nil {
+		return nil
 	}
 
-	return string(output), err
+	_, _, err = client.AccountRegistry.Create(name)
+	return err
 }
 
-func getBotAccounts(bin, homeDir string) (accs []string, err error) {
+func getBotAccounts(client cosmosclient.Client) (accs []string, err error) {
 	var accounts []account
-	accounts, err = listAccounts(bin, homeDir)
+	accounts, err = listAccounts(client)
 	if err != nil {
 		return
 	}
@@ -108,33 +99,32 @@ func getBotAccounts(bin, homeDir string) (accs []string, err error) {
 	return
 }
 
-func listAccounts(bin string, homeDir string) ([]account, error) {
-	cmd := exec.Command(
-		bin, "keys", "list", "--keyring-backend", "test", "--keyring-dir", homeDir, "--output", "json")
-
-	out, err := cmd.Output()
-	if eerr, ok := err.(*exec.ExitError); ok {
-		err = fmt.Errorf("failed to list accounts: %s", eerr.Stderr)
-	}
+func listAccounts(client cosmosclient.Client) ([]account, error) {
+	accs, err := client.AccountRegistry.List()
 	if err != nil {
-		return nil, err
-	}
-	if string(out) == noRecordsFound {
-		return nil, nil
+		return nil, fmt.Errorf("failed to get accounts: %w", err)
 	}
 
 	var accounts []account
-	if err = json.Unmarshal(out, &accounts); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal accounts: %w", err)
+	for _, acc := range accs {
+		addr, err := acc.Record.GetAddress()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get account address: %w", err)
+		}
+		acct := account{
+			Name:    acc.Name,
+			Address: addr.String(),
+		}
+		accounts = append(accounts, acct)
 	}
 
 	return accounts, nil
 }
 
-func createBotAccounts(bin, homeDir string, count int) (names []string, err error) {
+func createBotAccounts(client cosmosclient.Client, count int) (names []string, err error) {
 	for range count {
 		botName := fmt.Sprintf("%s%s", botNamePrefix, uuid.New().String()[0:5])
-		if _, err = addAccount(bin, botName, homeDir); err != nil {
+		if err = addAccount(client, botName); err != nil {
 			err = fmt.Errorf("failed to create account: %w", err)
 			return
 		}
