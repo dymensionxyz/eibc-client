@@ -240,12 +240,19 @@ func addRewards(rewards ...string) fundsOption {
 	}
 }
 
-func (a *accountService) updateFunds(ctx context.Context, opts ...fundsOption) error {
+func (a *accountService) refreshBalances(ctx context.Context) error {
 	balances, err := a.getAccountBalances(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get account balances: %w", err)
 	}
 	a.balances = balances
+	return nil
+}
+
+func (a *accountService) updateFunds(ctx context.Context, opts ...fundsOption) error {
+	if err := a.refreshBalances(ctx); err != nil {
+		return fmt.Errorf("failed to refresh account balances: %w", err)
+	}
 
 	b, err := a.store.GetBot(ctx, a.account.GetAddress().String())
 	if err != nil {
@@ -254,11 +261,12 @@ func (a *accountService) updateFunds(ctx context.Context, opts ...fundsOption) e
 	if b == nil {
 		b = &store.Bot{
 			Address: a.account.GetAddress().String(),
+			Name:    a.accountName,
 		}
 	}
 
-	b.Balances = make([]string, 0, len(balances))
-	for _, balance := range balances {
+	b.Balances = make([]string, 0, len(a.balances))
+	for _, balance := range a.balances {
 		b.Balances = append(b.Balances, balance.String())
 	}
 

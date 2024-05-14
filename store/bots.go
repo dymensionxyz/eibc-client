@@ -13,6 +13,7 @@ import (
 
 type Bot struct {
 	Address        string `bson:"_id,omitempty"`
+	Name           string
 	Balances       []string
 	PendingRewards PendingRewards
 	Orders         []*Order
@@ -48,8 +49,15 @@ func IncludePendingOrders() BotOption {
 	}
 }
 
+func OnlyWithFunds() BotOption {
+	return func(f *botFilter) {
+		f.withFunds = true
+	}
+}
+
 type botFilter struct {
 	includePendingOrders bool
+	withFunds            bool
 }
 
 func (s *botStore) GetBot(ctx context.Context, key string, opts ...BotOption) (*Bot, error) {
@@ -79,9 +87,21 @@ func (s *botStore) GetBot(ctx context.Context, key string, opts ...BotOption) (*
 	return &bot, nil
 }
 
-func (s *botStore) GetBots(ctx context.Context) ([]*Bot, error) {
+func (s *botStore) GetBots(ctx context.Context, opts ...BotOption) ([]*Bot, error) {
 	botsCollection := s.Database(botDatabase).Collection(botCollection)
-	cursor, err := botsCollection.Find(ctx, nil)
+
+	var filter botFilter
+	for _, opt := range opts {
+		opt(&filter)
+	}
+
+	f := bson.M{}
+
+	if filter.withFunds {
+		f["balances"] = bson.M{"$exists": true, "$ne": bson.A{}}
+	}
+
+	cursor, err := botsCollection.Find(ctx, f)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get all bots: %w", err)
 	}

@@ -32,7 +32,9 @@ type botStore interface {
 	SaveManyOrders(ctx context.Context, orders []*store.Order) error
 	DeleteOrder(ctx context.Context, id string) error
 	GetBot(ctx context.Context, key string, opts ...store.BotOption) (*store.Bot, error)
+	GetBots(ctx context.Context, opts ...store.BotOption) ([]*store.Bot, error)
 	SaveBot(ctx context.Context, bot *store.Bot) error
+	Close()
 }
 
 func newOrderTracker(
