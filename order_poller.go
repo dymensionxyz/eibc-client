@@ -97,15 +97,8 @@ func (p *orderPoller) pollPendingDemandOrders(ctx context.Context) error {
 
 	unfulfilledOrders := make([]*demandOrder, 0, len(orders))
 
-	// TODO: maybe check here which denoms the whale can provide funds for
-
 	for _, d := range orders {
-		// if already in the map, means fulfilled or fulfilling
-		if p.tracker.isOrderFulfilled(d.EibcOrderId) {
-			continue
-		}
-
-		if p.tracker.isOrderCurrent(d.EibcOrderId) {
+		if !p.tracker.canFulfillOrder(d.EibcOrderId, d.Denom) {
 			continue
 		}
 

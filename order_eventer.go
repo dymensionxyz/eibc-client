@@ -36,38 +36,38 @@ func newOrderEventer(
 	}
 }
 
-func (of *orderEventer) start(ctx context.Context) error {
-	if err := of.subscribeToPendingDemandOrders(ctx); err != nil {
+func (e *orderEventer) start(ctx context.Context) error {
+	if err := e.subscribeToPendingDemandOrders(ctx); err != nil {
 		return fmt.Errorf("failed to subscribe to pending demand orders: %w", err)
 	}
 
 	return nil
 }
 
-func (of *orderEventer) enqueueEventOrders(res tmtypes.ResultEvent) error {
-	newOrders, err := of.parseOrdersFromEvents(res)
+func (e *orderEventer) enqueueEventOrders(res tmtypes.ResultEvent) error {
+	newOrders, err := e.parseOrdersFromEvents(res)
 	if err != nil {
 		return fmt.Errorf("failed to parse orders from events: %w", err)
 	}
 
-	if of.logger.Level() <= zap.DebugLevel {
+	if e.logger.Level() <= zap.DebugLevel {
 		ids := make([]string, 0, len(newOrders))
 		for _, order := range newOrders {
 			ids = append(ids, order.id)
 		}
-		of.logger.Debug("new demand orders", zap.Strings("count", ids))
+		e.logger.Debug("new demand orders", zap.Strings("count", ids))
 	} else {
-		of.logger.Info("new demand orders", zap.Int("count", len(newOrders)))
+		e.logger.Info("new demand orders", zap.Int("count", len(newOrders)))
 	}
 
-	batch := make([]*demandOrder, 0, of.batchSize)
+	batch := make([]*demandOrder, 0, e.batchSize)
 
 	for _, order := range newOrders {
 		batch = append(batch, order)
 
-		if len(batch) >= of.batchSize || len(batch) == len(newOrders) {
-			of.newOrders <- batch
-			batch = make([]*demandOrder, 0, of.batchSize)
+		if len(batch) >= e.batchSize || len(batch) == len(newOrders) {
+			e.newOrders <- batch
+			batch = make([]*demandOrder, 0, e.batchSize)
 		}
 	}
 
@@ -78,7 +78,7 @@ func (of *orderEventer) enqueueEventOrders(res tmtypes.ResultEvent) error {
 	return nil
 }
 
-func (of *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) ([]*demandOrder, error) {
+func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) ([]*demandOrder, error) {
 	ids := res.Events["eibc.id"]
 
 	if len(ids) == 0 {
@@ -91,17 +91,13 @@ func (of *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) ([]*deman
 	newOrders := make([]*demandOrder, 0, len(ids))
 
 	for i, id := range ids {
-		if of.tracker.isOrderFulfilled(id) {
-			continue
-		}
-
-		if of.tracker.isOrderCurrent(id) {
-			continue
-		}
-
 		price, err := sdk.ParseCoinNormalized(prices[i])
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse price: %w", err)
+		}
+
+		if !e.tracker.canFulfillOrder(id, price.Denom) {
+			continue
 		}
 
 		fee, err := sdk.ParseCoinNormalized(fees[i])
@@ -120,10 +116,10 @@ func (of *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) ([]*deman
 	return newOrders, nil
 }
 
-func (of *orderEventer) subscribeToPendingDemandOrders(ctx context.Context) error {
+func (e *orderEventer) subscribeToPendingDemandOrders(ctx context.Context) error {
 	const query = "eibc.is_fulfilled='false'"
 
-	resCh, err := of.client.RPC.Subscribe(ctx, "", query)
+	resCh, err := e.client.RPC.Subscribe(ctx, "", query)
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to demand orders: %w", err)
 	}
@@ -132,8 +128,8 @@ func (of *orderEventer) subscribeToPendingDemandOrders(ctx context.Context) erro
 		for {
 			select {
 			case res := <-resCh:
-				if err := of.enqueueEventOrders(res); err != nil {
-					of.logger.Error("failed to enqueue event orders", zap.Error(err))
+				if err := e.enqueueEventOrders(res); err != nil {
+					e.logger.Error("failed to enqueue event orders", zap.Error(err))
 				}
 			case <-ctx.Done():
 				return

@@ -19,10 +19,11 @@ type orderTracker struct {
 	store  botStore
 	logger *zap.Logger
 
-	comu          sync.Mutex
-	currentOrders map[string]struct{}
-	trackedOrders map[string]struct{}
-	sync.Mutex
+	comu              sync.Mutex
+	currentOrders     map[string]struct{}
+	tomu              sync.Mutex
+	trackedOrders     map[string]struct{}
+	denomsWhitelist   map[string]struct{}
 	fulfilledOrdersCh chan *orderBatch
 }
 
@@ -41,6 +42,7 @@ func newOrderTracker(
 	client cosmosclient.Client,
 	store botStore,
 	fulfilledOrdersCh chan *orderBatch,
+	denomsWhitelist map[string]struct{},
 	logger *zap.Logger,
 ) *orderTracker {
 	return &orderTracker{
@@ -48,6 +50,7 @@ func newOrderTracker(
 		store:             store,
 		currentOrders:     make(map[string]struct{}),
 		fulfilledOrdersCh: fulfilledOrdersCh,
+		denomsWhitelist:   denomsWhitelist,
 		logger:            logger.With(zap.String("module", "order-resolver")),
 		trackedOrders:     make(map[string]struct{}),
 	}
@@ -85,11 +88,11 @@ func (or *orderTracker) loadTrackedOrders(ctx context.Context) error {
 		return fmt.Errorf("failed to get pending orders: %w", err)
 	}
 
-	or.Lock()
+	or.tomu.Lock()
 	for _, order := range orders {
 		or.trackedOrders[order.ID] = struct{}{}
 	}
-	or.Unlock()
+	or.tomu.Unlock()
 	or.logger.Info("loaded tracked orders", zap.Int("count", len(or.trackedOrders)))
 
 	return nil
@@ -97,9 +100,12 @@ func (or *orderTracker) loadTrackedOrders(ctx context.Context) error {
 
 func (or *orderTracker) addFulfilledOrders(ctx context.Context, batch *orderBatch) error {
 	storeOrders := make([]*store.Order, len(batch.orders))
-	or.Lock()
+	or.tomu.Lock()
 	or.comu.Lock()
 	for i, order := range batch.orders {
+		if len(order.amount) == 0 {
+			continue
+		}
 		// add to cache
 		or.trackedOrders[order.id] = struct{}{}
 		delete(or.currentOrders, order.id)
@@ -107,13 +113,11 @@ func (or *orderTracker) addFulfilledOrders(ctx context.Context, batch *orderBatc
 		storeOrders[i] = &store.Order{
 			ID:        order.id,
 			Fulfiller: batch.fulfiller,
-			Amount:    order.amount[0].String(), // TODO?
-			// FulfilledHeight:         order.FulfilledHeight,
-			// ExpectedFinalizedHeight: order.ExpectedFinalizedHeight,
-			Status: store.OrderStatusPending,
+			Amount:    order.amount[0].String(),
+			Status:    store.OrderStatusPending,
 		}
 	}
-	or.Unlock()
+	or.tomu.Unlock()
 	or.comu.Unlock()
 
 	if err := or.store.SaveManyOrders(ctx, storeOrders); err != nil {
@@ -123,9 +127,26 @@ func (or *orderTracker) addFulfilledOrders(ctx context.Context, batch *orderBatc
 	return nil
 }
 
+func (or *orderTracker) canFulfillOrder(id, denom string) bool {
+	// exclude orders whose denoms are not in the whitelist
+	if _, found := or.denomsWhitelist[denom]; !found {
+		return false
+	}
+
+	if or.isOrderFulfilled(id) {
+		return false
+	}
+
+	if or.isOrderCurrent(id) {
+		return false
+	}
+
+	return true
+}
+
 func (or *orderTracker) isOrderFulfilled(id string) bool {
-	or.Lock()
-	defer or.Unlock()
+	or.tomu.Lock()
+	defer or.tomu.Unlock()
 
 	_, ok := or.trackedOrders[id]
 	return ok
@@ -183,8 +204,8 @@ func (or *orderTracker) finalizeOrder(ctx context.Context, res tmtypes.ResultEve
 }
 
 func (or *orderTracker) finalizeOrderWithID(ctx context.Context, id string) error {
-	or.Lock()
-	defer or.Unlock()
+	or.tomu.Lock()
+	defer or.tomu.Unlock()
 
 	_, ok := or.trackedOrders[id]
 	if !ok {

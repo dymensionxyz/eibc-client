@@ -66,7 +66,13 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 
 	fulfilledOrdersCh := make(chan *orderBatch, newOrderBufferSize) // TODO: make buffer size configurable
 	bstore := store.NewBotStore(db)
-	ordTracker := newOrderTracker(fetcherCosmosClient, bstore, fulfilledOrdersCh, logger)
+
+	denomsWhitelist := make(map[string]struct{}, len(config.Whale.AllowedBalanceThresholds))
+	for denom := range config.Whale.AllowedBalanceThresholds {
+		denomsWhitelist[denom] = struct{}{}
+	}
+
+	ordTracker := newOrderTracker(fetcherCosmosClient, bstore, fulfilledOrdersCh, denomsWhitelist, logger)
 
 	eventer := newOrderEventer(
 		fetcherCosmosClient,
