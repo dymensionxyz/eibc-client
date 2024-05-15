@@ -104,7 +104,7 @@ var balancesCmd = &cobra.Command{
 			log.Fatalf("failed to unmarshal config: %v", err)
 		}
 
-		config.skipRefund = true
+		config.SkipRefund = true
 
 		oc, err := newOrderClient(cmd.Context(), config)
 		if err != nil {
