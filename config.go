@@ -74,7 +74,7 @@ const (
 	testKeyringBackend       = "test"
 
 	botNamePrefix               = "bot-"
-	whaleAccountName            = "client"
+	defaultWhaleAccountName     = "client"
 	defaultBotTopUpFactor       = 2
 	defaultNumberOfBots         = 1
 	newOrderBufferSize          = 100
@@ -104,7 +104,7 @@ func initConfig() {
 	viper.SetDefault("gas.fees", defaultGasFees)
 	viper.SetDefault("gas.minimum_gas_balance", defaultMinimumGasBalance)
 
-	viper.SetDefault("whale.account_name", whaleAccountName)
+	viper.SetDefault("whale.account_name", defaultWhaleAccountName)
 	viper.SetDefault("whale.keyring_backend", testKeyringBackend)
 	viper.SetDefault("whale.allowed_balance_thresholds", defaultBalanceThresholds)
 	viper.SetDefault("whale.keyring_dir", defaultHomeDir)

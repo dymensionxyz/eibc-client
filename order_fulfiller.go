@@ -38,6 +38,41 @@ func newOrderFulfiller(
 	}
 }
 
+// add command that creates all the bots to be used?
+
+func buildBot(
+	ctx context.Context,
+	name string,
+	logger *zap.Logger,
+	config botConfig,
+	clientCfg clientConfig,
+	store accountStore,
+	minimumGasBalance sdk.Coin,
+	newOrderCh chan []*demandOrder,
+	fulfilledCh chan *orderBatch,
+	topUpCh chan topUpRequest,
+) (*orderFulfiller, error) {
+	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(clientCfg)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cosmos client for bot: %s;err: %w", name, err)
+	}
+
+	accountSvc, err := newAccountService(
+		cosmosClient,
+		store,
+		logger,
+		name,
+		minimumGasBalance,
+		topUpCh,
+		withTopUpFactor(config.TopUpFactor),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create account service for bot: %s;err: %w", name, err)
+	}
+
+	return newOrderFulfiller(accountSvc, newOrderCh, fulfilledCh, cosmosClient, logger), nil
+}
+
 func (ol *orderFulfiller) start(ctx context.Context) error {
 	if err := ol.accountSvc.updateFunds(ctx); err != nil {
 		return fmt.Errorf("failed to update account funds: %w", err)

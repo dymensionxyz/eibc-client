@@ -286,6 +286,10 @@ func (a *accountService) updateFunds(ctx context.Context, opts ...fundsOption) e
 	return nil
 }
 
+func (a *accountService) address() string {
+	return a.account.GetAddress().String()
+}
+
 func (a *accountService) getAccountBalances(ctx context.Context) (sdk.Coins, error) {
 	resp, err := banktypes.NewQueryClient(a.client.Context()).SpendableBalances(ctx, &banktypes.QuerySpendableBalancesRequest{
 		Address: a.account.GetAddress().String(),
