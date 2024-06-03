@@ -61,6 +61,7 @@ func (or *orderTracker) start(ctx context.Context) error {
 		return fmt.Errorf("failed to load orders: %w", err)
 	}
 
+	// TODO: consider that if the client is offline if might miss finalized orders, and the state might not be updated
 	if err := or.waitForFinalizedOrder(ctx); err != nil {
 		or.logger.Error("failed to wait for finalized order", zap.Error(err))
 	}
@@ -129,7 +130,7 @@ func (or *orderTracker) addFulfilledOrders(ctx context.Context, batch *orderBatc
 
 func (or *orderTracker) canFulfillOrder(id, denom string) bool {
 	// exclude orders whose denoms are not in the whitelist
-	if _, found := or.denomsWhitelist[denom]; !found {
+	if _, found := or.denomsWhitelist[strings.ToLower(denom)]; !found {
 		return false
 	}
 

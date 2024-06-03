@@ -104,6 +104,9 @@ func (ol *orderFulfiller) processBatch(ctx context.Context, batch []*demandOrder
 
 	defer func() {
 		go func() {
+			if len(ids) == 0 {
+				return
+			}
 			// TODO: check if balances get updated before the new batch starts processing
 			if err := ol.accountSvc.updateFunds(ctx, addRewards(rewards...)); err != nil {
 				ol.logger.Error("failed to refresh balances", zap.Error(err))

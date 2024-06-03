@@ -103,7 +103,7 @@ func (s *botStore) SaveManyOrders(ctx context.Context, orders []*Order) error {
 
 	_, err := ordersCollection.InsertMany(ctx, records)
 	if err != nil {
-		return fmt.Errorf("failed to save orders: %w", err)
+		return fmt.Errorf("failed to insert many orders: %w", err)
 	}
 
 	return nil

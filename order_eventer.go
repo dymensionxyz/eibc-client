@@ -55,7 +55,7 @@ func (e *orderEventer) enqueueEventOrders(res tmtypes.ResultEvent) error {
 		for _, order := range newOrders {
 			ids = append(ids, order.id)
 		}
-		e.logger.Debug("new demand orders", zap.Strings("count", ids))
+		e.logger.Debug("new demand orders", zap.Strings("ids", ids))
 	} else {
 		e.logger.Info("new demand orders", zap.Int("count", len(newOrders)))
 	}
