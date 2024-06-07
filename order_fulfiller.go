@@ -107,10 +107,6 @@ func (ol *orderFulfiller) processBatch(ctx context.Context, batch []*demandOrder
 			if len(ids) == 0 {
 				return
 			}
-			// TODO: check if balances get updated before the new batch starts processing
-			if err := ol.accountSvc.updateFunds(ctx, addRewards(rewards...)); err != nil {
-				ol.logger.Error("failed to refresh balances", zap.Error(err))
-			}
 
 			fulfilledOrders := make([]*demandOrder, len(ids))
 
@@ -119,6 +115,11 @@ func (ol *orderFulfiller) processBatch(ctx context.Context, batch []*demandOrder
 					fulfilledOrders[i] = order
 					rewards = append(rewards, order.amount.String())
 				}
+			}
+
+			// TODO: check if balances get updated before the new batch starts processing
+			if err := ol.accountSvc.updateFunds(ctx, addRewards(rewards...)); err != nil {
+				ol.logger.Error("failed to refresh balances", zap.Error(err))
 			}
 
 			ol.fulfilledOrdersCh <- &orderBatch{

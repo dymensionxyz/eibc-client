@@ -233,8 +233,16 @@ func (or *orderTracker) finalizeOrderWithID(ctx context.Context, id string) erro
 		return fmt.Errorf("failed to parse pending rewards: %w", err)
 	}
 
+	balances, err := sdk.ParseCoinsNormalized(strings.Join(b.Balances, ","))
+	if err != nil {
+		return fmt.Errorf("failed to parse balances: %w", err)
+	}
+
 	if pendingRewards.IsAnyGTE(sdk.NewCoins(orderAmount)) {
-		pendingRewards.Sub(orderAmount)
+		pendingRewards = pendingRewards.Sub(orderAmount)
+		balances = balances.Add(orderAmount)
+		b.PendingRewards = store.CoinsToStrings(pendingRewards)
+		b.Balances = store.CoinsToStrings(balances)
 	}
 
 	if err := or.store.SaveBot(ctx, b); err != nil {
