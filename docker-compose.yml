@@ -1,0 +1,48 @@
+version: '3.9'
+
+services:
+
+  eibc-init:
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    command: ["./eibc-client", "init"]
+    volumes:
+      - ${CONFIG_PATH}:/app/config.yaml
+      - ${KEYRING_DIR}:/app/.order-client
+
+  eibc-start:
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    depends_on:
+      - db
+    environment:
+      - DB_PATH=mongodb://db:27017
+    command: ["./eibc-client", "start", "--config", "/app/config.yaml"]
+    volumes:
+     - ${CONFIG_PATH}:/app/config.yaml
+     - ${KEYRING_DIR}:/app/.order-client
+
+  eibc-funds:
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    depends_on:
+      - db
+    environment:
+      - DB_PATH=mongodb://db:27017
+    command: [ "./eibc-client", "funds", "--config", "/app/config.yaml" ]
+    volumes:
+      - ${CONFIG_PATH}:/app/config.yaml
+      - ${KEYRING_DIR}:/app/.order-client
+
+  db:
+    image: mongo:7.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+
+volumes:
+  mongodb_data:

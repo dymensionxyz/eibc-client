@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 	"go.uber.org/zap"
 )
 
@@ -45,6 +46,62 @@ func newWhale(
 		chainID:           chainID,
 		node:              node,
 	}
+}
+
+func buildWhale(
+	ctx context.Context,
+	logger *zap.Logger,
+	config whaleConfig,
+	slack *slacker,
+	nodeAddress, gasFees, gasPrices string,
+	minimumGasBalance sdk.Coin,
+	topUpCh chan topUpRequest,
+) (*whale, error) {
+	clientCfg := clientConfig{
+		homeDir:        config.KeyringDir,
+		keyringBackend: config.KeyringBackend,
+		nodeAddress:    nodeAddress,
+		gasFees:        gasFees,
+		gasPrices:      gasPrices,
+	}
+
+	balanceThresholdMap := make(map[string]sdk.Coin)
+	for denom, threshold := range config.AllowedBalanceThresholds {
+		coinStr := threshold + denom
+		coin, err := sdk.ParseCoinNormalized(coinStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse threshold coin: %w", err)
+		}
+
+		balanceThresholdMap[denom] = coin
+	}
+
+	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(clientCfg)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cosmos client for whale: %w", err)
+	}
+
+	accountSvc, err := newAccountService(
+		cosmosClient,
+		nil, // whale doesn't need a store for now
+		logger,
+		config.AccountName,
+		minimumGasBalance,
+		topUpCh,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create account service for whale: %w", err)
+	}
+
+	return newWhale(
+		accountSvc,
+		balanceThresholdMap,
+		logger,
+		slack,
+		cosmosClient.Context().ChainID,
+		clientCfg.nodeAddress,
+		topUpCh,
+	), nil
 }
 
 func (w *whale) start(ctx context.Context) error {

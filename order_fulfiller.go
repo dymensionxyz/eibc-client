@@ -4,11 +4,9 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	eibctypes "github.com/dymensionxyz/dymension/v3/x/eibc/types"
-	rollapptypes "github.com/dymensionxyz/dymension/v3/x/rollapp/types"
 	"go.uber.org/zap"
 
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
@@ -19,45 +17,122 @@ type orderFulfiller struct {
 	client     cosmosclient.Client
 	logger     *zap.Logger
 
+	newOrdersCh                chan []*demandOrder
+	fulfilledOrdersCh          chan<- *orderBatch
 	orderDisputePeriodInBlocks uint64
 }
 
-func newOrderFulfiller(accountSvc *accountService, client cosmosclient.Client, logger *zap.Logger) *orderFulfiller {
+func newOrderFulfiller(
+	accountSvc *accountService,
+	newOrdersCh chan []*demandOrder,
+	fulfilledOrdersCh chan<- *orderBatch,
+	client cosmosclient.Client,
+	logger *zap.Logger,
+) *orderFulfiller {
 	return &orderFulfiller{
-		accountSvc: accountSvc,
-		client:     client,
-		logger:     logger.With(zap.String("module", "order-fulfiller"), zap.String("name", accountSvc.accountName)),
+		accountSvc:        accountSvc,
+		client:            client,
+		fulfilledOrdersCh: fulfilledOrdersCh,
+		newOrdersCh:       newOrdersCh,
+		logger:            logger.With(zap.String("module", "order-fulfiller"), zap.String("name", accountSvc.accountName)),
 	}
 }
 
-func (ol *orderFulfiller) fulfillOrders(
+// add command that creates all the bots to be used?
+
+func buildBot(
 	ctx context.Context,
-	newOrdersCh chan []*demandOrder,
-	unfulfilledOrderIDsCh chan<- []string,
-) {
+	name string,
+	logger *zap.Logger,
+	config botConfig,
+	clientCfg clientConfig,
+	store accountStore,
+	minimumGasBalance sdk.Coin,
+	newOrderCh chan []*demandOrder,
+	fulfilledCh chan *orderBatch,
+	topUpCh chan topUpRequest,
+) (*orderFulfiller, error) {
+	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(clientCfg)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cosmos client for bot: %s;err: %w", name, err)
+	}
+
+	accountSvc, err := newAccountService(
+		cosmosClient,
+		store,
+		logger,
+		name,
+		minimumGasBalance,
+		topUpCh,
+		withTopUpFactor(config.TopUpFactor),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create account service for bot: %s;err: %w", name, err)
+	}
+
+	return newOrderFulfiller(accountSvc, newOrderCh, fulfilledCh, cosmosClient, logger), nil
+}
+
+func (ol *orderFulfiller) start(ctx context.Context) error {
+	if err := ol.accountSvc.updateFunds(ctx); err != nil {
+		return fmt.Errorf("failed to update account funds: %w", err)
+	}
+
+	ol.logger.Info("starting fulfiller...", zap.String("balances", ol.accountSvc.balances.String()))
+
+	ol.fulfillOrders(ctx)
+	return nil
+}
+
+func (ol *orderFulfiller) fulfillOrders(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case batch := <-newOrdersCh:
-			if err := ol.processBatch(ctx, batch, unfulfilledOrderIDsCh); err != nil {
+		case orders := <-ol.newOrdersCh:
+			if err := ol.processBatch(ctx, orders); err != nil {
 				ol.logger.Error("failed to process batch", zap.Error(err))
 			}
 		}
 	}
 }
 
-func (ol *orderFulfiller) processBatch(ctx context.Context, batch []*demandOrder, unfulfilledOrderIDsCh chan<- []string) error {
+func (ol *orderFulfiller) processBatch(ctx context.Context, batch []*demandOrder) error {
+	var (
+		rewards, ids []string
+	)
+
 	defer func() {
-		if err := ol.accountSvc.refreshBalances(ctx); err != nil {
-			ol.logger.Error("failed to refresh balances", zap.Error(err))
-		}
+		go func() {
+			if len(ids) == 0 {
+				return
+			}
+
+			fulfilledOrders := make([]*demandOrder, len(ids))
+
+			for i, order := range batch {
+				if slices.Contains(ids, order.id) {
+					fulfilledOrders[i] = order
+					rewards = append(rewards, order.amount.String())
+				}
+			}
+
+			// TODO: check if balances get updated before the new batch starts processing
+			if err := ol.accountSvc.updateFunds(ctx, addRewards(rewards...)); err != nil {
+				ol.logger.Error("failed to refresh balances", zap.Error(err))
+			}
+
+			ol.fulfilledOrdersCh <- &orderBatch{
+				orders:    fulfilledOrders,
+				fulfiller: ol.accountSvc.account.GetAddress().String(),
+			}
+		}()
 	}()
 
 	coins := sdk.NewCoins()
 
 	for _, order := range batch {
-		coins = coins.Add(order.price...)
+		coins = coins.Add(order.amount...)
 	}
 
 	ol.logger.Debug("ensuring balances for orders")
@@ -72,11 +147,11 @@ func (ol *orderFulfiller) processBatch(ctx context.Context, batch []*demandOrder
 	}
 
 	leftoverBatch := make([]string, 0, len(batch))
-	ids := make([]string, 0, len(batch))
+	ids = make([]string, 0, len(batch))
 
 outer:
 	for _, order := range batch {
-		for _, price := range order.price {
+		for _, price := range order.amount {
 			if !slices.Contains(ensuredDenoms, price.Denom) {
 				leftoverBatch = append(leftoverBatch, order.id)
 				continue outer
@@ -86,16 +161,11 @@ outer:
 		}
 	}
 
-	select {
-	case unfulfilledOrderIDsCh <- leftoverBatch:
-	default:
-	}
-
 	if len(ids) == 0 {
 		ol.logger.Debug(
 			"no orders to fulfill",
 			zap.String("bot-name", ol.accountSvc.accountName),
-			zap.Int("count", len(leftoverBatch)),
+			zap.Int("leftover count", len(leftoverBatch)),
 		)
 		return nil
 	}
@@ -103,25 +173,12 @@ outer:
 	ol.logger.Info("fulfilling orders", zap.Int("count", len(ids)))
 
 	if err := ol.fulfillDemandOrders(ids...); err != nil {
-		select {
-		case unfulfilledOrderIDsCh <- ids:
-		default:
-		}
 		return fmt.Errorf("failed to fulfill orders: ids: %v; %w", ids, err)
 	}
 
 	ol.logger.Info("orders fulfilled", zap.Int("count", len(ids)))
 
 	return nil
-
-	// mark the orders as fulfilled
-	/*for _, id := range ids {
-		latestHeight, err := ol.getLatestHeight(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get latest height: %w", err)
-		}
-		ol.demandOrders[id].fulfilledAtHeight = uint64(latestHeight)
-	}*/
 }
 
 func (ol *orderFulfiller) fulfillDemandOrders(demandOrderID ...string) error {
@@ -140,40 +197,4 @@ func (ol *orderFulfiller) fulfillDemandOrders(demandOrderID ...string) error {
 	}
 
 	return nil
-}
-
-func (ol *orderFulfiller) getDisputePeriodInBlocks(ctx context.Context) (uint64, error) {
-	queryClient := rollapptypes.NewQueryClient(ol.client.Context())
-	resp, err := queryClient.Params(ctx, &rollapptypes.QueryParamsRequest{})
-	if err != nil {
-		return 0, fmt.Errorf("failed to get dispute period: %w", err)
-	}
-	return resp.Params.DisputePeriodInBlocks, nil
-}
-
-// not in use currently
-func (ol *orderFulfiller) disputePeriodUpdater(ctx context.Context, disputePeriodRefreshInterval time.Duration) {
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(disputePeriodRefreshInterval):
-				var err error
-				// TODO: mutex?
-				ol.orderDisputePeriodInBlocks, err = ol.getDisputePeriodInBlocks(ctx)
-				if err != nil {
-					ol.logger.Error("failed to refresh dispute period", zap.Error(err))
-				}
-			}
-		}
-	}()
-}
-
-func (ol *orderFulfiller) getLatestHeight(ctx context.Context) (int64, error) {
-	status, err := ol.client.Status(ctx)
-	if err != nil {
-		return 0, err
-	}
-	return status.SyncInfo.LatestBlockHeight, nil
 }

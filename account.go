@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os/exec"
 	"slices"
 	"strings"
 
@@ -17,10 +15,13 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
+
+	"github.com/dymensionxyz/order-client/store"
 )
 
 type accountService struct {
 	client            cosmosclient.Client
+	store             accountStore
 	logger            *zap.Logger
 	account           client.Account
 	balances          sdk.Coins
@@ -30,7 +31,10 @@ type accountService struct {
 	topUpCh           chan<- topUpRequest
 }
 
-const noRecordsFound = "No records were found in keyring\n"
+type accountStore interface {
+	GetBot(ctx context.Context, address string, _ ...store.BotOption) (*store.Bot, error)
+	SaveBot(ctx context.Context, bot *store.Bot) error
+}
 
 type option func(*accountService)
 
@@ -42,6 +46,7 @@ func withTopUpFactor(topUpFactor uint64) option {
 
 func newAccountService(
 	client cosmosclient.Client,
+	store accountStore,
 	logger *zap.Logger,
 	accountName string,
 	minimumGasBalance sdk.Coin,
@@ -50,6 +55,7 @@ func newAccountService(
 ) (*accountService, error) {
 	a := &accountService{
 		client:            client,
+		store:             store,
 		logger:            logger.With(zap.String("module", "account-service")),
 		accountName:       accountName,
 		minimumGasBalance: minimumGasBalance,
@@ -67,24 +73,19 @@ func newAccountService(
 	return a, nil
 }
 
-func addAccount(bin, name, homeDir string) (string, error) {
-	cmd := exec.Command(
-		bin, "keys", "add",
-		name, "--keyring-backend", "test",
-		"--keyring-dir", homeDir,
-	)
-
-	output, err := cmd.Output()
-	if eerr, ok := err.(*exec.ExitError); ok {
-		output = eerr.Stderr
+func addAccount(client cosmosclient.Client, name string) error {
+	_, err := client.AccountRegistry.GetByName(name)
+	if err == nil {
+		return nil
 	}
 
-	return string(output), err
+	_, _, err = client.AccountRegistry.Create(name)
+	return err
 }
 
-func getBotAccounts(bin, homeDir string) (accs []string, err error) {
+func getBotAccounts(client cosmosclient.Client) (accs []string, err error) {
 	var accounts []account
-	accounts, err = listAccounts(bin, homeDir)
+	accounts, err = listAccounts(client)
 	if err != nil {
 		return
 	}
@@ -98,33 +99,32 @@ func getBotAccounts(bin, homeDir string) (accs []string, err error) {
 	return
 }
 
-func listAccounts(bin string, homeDir string) ([]account, error) {
-	cmd := exec.Command(
-		bin, "keys", "list", "--keyring-backend", "test", "--keyring-dir", homeDir, "--output", "json")
-
-	out, err := cmd.Output()
-	if eerr, ok := err.(*exec.ExitError); ok {
-		err = fmt.Errorf("failed to list accounts: %s", eerr.Stderr)
-	}
+func listAccounts(client cosmosclient.Client) ([]account, error) {
+	accs, err := client.AccountRegistry.List()
 	if err != nil {
-		return nil, err
-	}
-	if string(out) == noRecordsFound {
-		return nil, nil
+		return nil, fmt.Errorf("failed to get accounts: %w", err)
 	}
 
 	var accounts []account
-	if err = json.Unmarshal(out, &accounts); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal accounts: %w", err)
+	for _, acc := range accs {
+		addr, err := acc.Record.GetAddress()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get account address: %w", err)
+		}
+		acct := account{
+			Name:    acc.Name,
+			Address: addr.String(),
+		}
+		accounts = append(accounts, acct)
 	}
 
 	return accounts, nil
 }
 
-func createBotAccounts(bin, homeDir string, count int) (names []string, err error) {
+func createBotAccounts(client cosmosclient.Client, count int) (names []string, err error) {
 	for range count {
 		botName := fmt.Sprintf("%s%s", botNamePrefix, uuid.New().String()[0:5])
-		if _, err = addAccount(bin, botName, homeDir); err != nil {
+		if err = addAccount(client, botName); err != nil {
 			err = fmt.Errorf("failed to create account: %w", err)
 			return
 		}
@@ -218,6 +218,18 @@ func (a *accountService) balanceOf(denom string) sdk.Int {
 	return a.balances.AmountOf(denom)
 }
 
+type fundsOption func(*fundsRequest)
+
+type fundsRequest struct {
+	rewards []string
+}
+
+func addRewards(rewards ...string) fundsOption {
+	return func(r *fundsRequest) {
+		r.rewards = rewards
+	}
+}
+
 func (a *accountService) refreshBalances(ctx context.Context) error {
 	balances, err := a.getAccountBalances(ctx)
 	if err != nil {
@@ -225,6 +237,57 @@ func (a *accountService) refreshBalances(ctx context.Context) error {
 	}
 	a.balances = balances
 	return nil
+}
+
+func (a *accountService) updateFunds(ctx context.Context, opts ...fundsOption) error {
+	if err := a.refreshBalances(ctx); err != nil {
+		return fmt.Errorf("failed to refresh account balances: %w", err)
+	}
+
+	b, err := a.store.GetBot(ctx, a.account.GetAddress().String())
+	if err != nil {
+		return fmt.Errorf("failed to get bot: %w", err)
+	}
+	if b == nil {
+		b = &store.Bot{
+			Address: a.account.GetAddress().String(),
+			Name:    a.accountName,
+		}
+	}
+
+	b.Balances = make([]string, 0, len(a.balances))
+	for _, balance := range a.balances {
+		b.Balances = append(b.Balances, balance.String())
+	}
+
+	pendingRewards := b.PendingRewards.ToCoins()
+
+	req := &fundsRequest{}
+	for _, opt := range opts {
+		opt(req)
+	}
+
+	if len(req.rewards) > 0 {
+		for _, r := range req.rewards {
+			pr, err := sdk.ParseCoinNormalized(r)
+			if err != nil {
+				return fmt.Errorf("failed to parse reward coin: %w", err)
+			}
+			pendingRewards = pendingRewards.Add(pr)
+		}
+
+		b.PendingRewards = store.CoinsToStrings(pendingRewards)
+	}
+
+	if err := a.store.SaveBot(ctx, b); err != nil {
+		return fmt.Errorf("failed to update bot: %w", err)
+	}
+
+	return nil
+}
+
+func (a *accountService) address() string {
+	return a.account.GetAddress().String()
 }
 
 func (a *accountService) getAccountBalances(ctx context.Context) (sdk.Coins, error) {

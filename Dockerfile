@@ -9,10 +9,7 @@ RUN go mod download
 COPY . .
 
 # Build the Go app
-RUN go build -o bot .
-
-# Expose port 8080 to the outside world
-EXPOSE 8080
+RUN go build -o eibc-client .
 
 # Command to run the executable
-CMD ["./bot"]
+CMD ["./eibc-client", "start"]
