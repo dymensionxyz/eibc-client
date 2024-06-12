@@ -5,11 +5,10 @@ import (
 	"time"
 
 	"github.com/cosmos/cosmos-sdk/client/flags"
+	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 	"github.com/ignite/cli/ignite/pkg/cosmosaccount"
 	"github.com/mitchellh/go-homedir"
 	"github.com/spf13/viper"
-
-	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 )
 
 type Config struct {
@@ -70,7 +69,7 @@ const (
 	defaultGasLimit          = 300000
 	defaultHubDenom          = "adym"
 	defaultGasFees           = "100000000000000000" + defaultHubDenom
-	defaultMinimumGasBalance = "40000000000" + defaultHubDenom
+	defaultMinimumGasBalance = "1000000000000000000" + defaultHubDenom
 	testKeyringBackend       = "test"
 
 	botNamePrefix               = "bot-"
