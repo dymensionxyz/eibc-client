@@ -113,6 +113,7 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) ([]*demand
 			id:     id,
 			amount: sdk.NewCoins(price.Add(fee)),
 			status: statuses[i],
+			from:   "events",
 		}
 		newOrders = append(newOrders, order)
 	}

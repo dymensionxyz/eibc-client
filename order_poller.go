@@ -64,6 +64,7 @@ type Order struct {
 	DestinationChannel string `json:"destinationChannel"`
 	Time               string `json:"time"`
 	time               time.Time
+	from               string
 }
 
 type ordersResponse struct {
@@ -104,16 +105,19 @@ func (p *orderPoller) pollPendingDemandOrders(ctx context.Context) error {
 	unfulfilledOrders := make([]*demandOrder, 0, len(orders))
 
 	for _, d := range orders {
-		amountStr := fmt.Sprintf("%s%s", d.Amount, d.Denom)
-
-		totalAmount, err := sdk.ParseCoinNormalized(amountStr)
+		totalAmount, err := sdk.ParseCoinNormalized(d.Amount)
 		if err != nil {
-			p.logger.Error("failed to parse amount", zap.Error(err))
-			continue
+			amountStr := fmt.Sprintf("%s%s", d.Amount, d.Denom)
+			totalAmount, err = sdk.ParseCoinNormalized(amountStr)
+			if err != nil {
+				p.logger.Error("failed to parse amount", zap.Error(err), zap.String("amount", amountStr))
+				continue
+			}
 		}
 		order := &demandOrder{
 			id:     d.EibcOrderId,
 			amount: sdk.NewCoins(totalAmount),
+			from:   d.from,
 		}
 		unfulfilledOrders = append(unfulfilledOrders, order)
 	}
@@ -200,6 +204,7 @@ func (p *orderPoller) getDemandOrdersFromIndexer(ctx context.Context) ([]Order, 
 			DestinationChannel: order.DestinationChannel,
 			Time:               order.Time,
 			time:               time.Unix(timeUnix/1000, (timeUnix%1000)*int64(time.Millisecond)),
+			from:               "indexer",
 		}
 
 		orders = append(orders, newOrder)
@@ -235,6 +240,7 @@ func (p *orderPoller) getDemandOrdersFromNode(ctx context.Context) ([]Order, err
 			EibcOrderId: order.Id,
 			Denom:       denom,
 			Amount:      order.Price.String(),
+			from:        "node",
 		}
 		orders = append(orders, newOrder)
 	}

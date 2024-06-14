@@ -13,6 +13,7 @@ type demandOrder struct {
 	id     string
 	amount sdk.Coins
 	status string
+	from   string
 }
 
 type account struct {

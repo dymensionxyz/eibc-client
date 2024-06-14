@@ -151,7 +151,7 @@ func (a *accountService) setupAccount() error {
 	return nil
 }
 
-func (a *accountService) ensureBalances(coins sdk.Coins) ([]string, error) {
+func (a *accountService) ensureBalances(coins sdk.Coins) []string {
 	// check if gas balance is below minimum
 	gasBalance := a.balanceOf(a.minimumGasBalance.Denom)
 	gasDiff := a.minimumGasBalance.Amount.Sub(gasBalance)
@@ -179,7 +179,7 @@ func (a *accountService) ensureBalances(coins sdk.Coins) ([]string, error) {
 
 	if toTopUp.Empty() {
 		// shouldn't happen
-		return fundedDenoms, nil
+		return fundedDenoms
 	}
 
 	// blocking operation
@@ -195,7 +195,7 @@ func (a *accountService) ensureBalances(coins sdk.Coins) ([]string, error) {
 	close(resCh)
 
 	fundedDenoms = slices.Concat(fundedDenoms, res)
-	return fundedDenoms, nil
+	return fundedDenoms
 }
 
 func (a *accountService) sendCoins(coins sdk.Coins, toAddrStr string) error {
