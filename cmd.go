@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/dymensionxyz/cosmosclient/cosmosclient"
+	commontypes "github.com/dymensionxyz/dymension/v3/x/common/types"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
@@ -84,6 +86,110 @@ var startCmd = &cobra.Command{
 
 		if err := oc.start(cmd.Context()); err != nil {
 			log.Fatalf("failed to start order client: %v", err)
+		}
+	},
+}
+
+var fulfillFromFile = &cobra.Command{
+	Use:   "fulfill-from-file",
+	Short: "Fulfill demand orders from a file",
+	Long:  `Fulfill demand orders from a file.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		viper.AutomaticEnv()
+
+		if err := viper.ReadInConfig(); err == nil {
+			fmt.Println("Using config file:", viper.ConfigFileUsed())
+		}
+
+		config := Config{}
+		if err := viper.Unmarshal(&config); err != nil {
+			log.Fatalf("failed to unmarshal config: %v", err)
+		}
+
+		log.Printf("using config file: %+v", viper.ConfigFileUsed())
+
+		sdkcfg := sdk.GetConfig()
+		sdkcfg.SetBech32PrefixForAccount(hubAddressPrefix, pubKeyPrefix)
+
+		clientCfg := clientConfig{
+			homeDir:        config.Whale.KeyringDir,
+			nodeAddress:    config.NodeAddress,
+			gasFees:        config.Gas.Fees,
+			gasPrices:      config.Gas.Prices,
+			keyringBackend: config.Whale.KeyringBackend,
+		}
+
+		cosmosClient, err := cosmosclient.New(cmd.Context(), getCosmosClientOptions(clientCfg)...)
+		if err != nil {
+			log.Fatalf("failed to create cosmos client: %v", err)
+		}
+
+		logger, err := buildLogger(config.LogLevel)
+		if err != nil {
+			log.Fatalf("failed to create logger: %v", err)
+		}
+
+		p := newOrderPoller(
+			cosmosClient,
+			nil,
+			OrderPollingConfig{},
+			0,
+			nil,
+			logger,
+		)
+
+		res, err := p.getDemandOrdersByStatus(cmd.Context(), commontypes.Status_PENDING.String())
+		if err != nil {
+			log.Fatalf("failed to get demand orders: %v", err)
+		}
+
+		if len(res) == 0 {
+			log.Println("no pending orders")
+			return
+		}
+
+		accountSvc, err := newAccountService(
+			cosmosClient,
+			nil,
+			logger,
+			config.Whale.AccountName,
+			sdk.Coin{},
+			nil,
+		)
+		if err != nil {
+			log.Fatalf("failed to create account service: %v", err)
+		}
+
+		ol := newOrderFulfiller(
+			accountSvc,
+			nil,
+			nil,
+			cosmosClient,
+			logger,
+		)
+
+		fmt.Println("Unfulfilled Orders:", len(res))
+
+		ids := make([]string, 0, len(res))
+		for _, order := range res {
+			if order.IsFullfilled {
+				continue
+			}
+			ids = append(ids, order.Id)
+		}
+
+		batch := make([]string, 0, config.Bots.MaxOrdersPerTx)
+
+		for _, order := range ids {
+			batch = append(batch, order)
+
+			if len(batch) >= config.Bots.MaxOrdersPerTx || len(batch) == len(ids) {
+				if err := ol.fulfillDemandOrders(batch...); err != nil {
+					log.Printf("failed to fulfill demand orders: %s\n", err)
+				}
+
+				batch = make([]string, 0, config.Bots.MaxOrdersPerTx)
+			}
 		}
 	},
 }
@@ -276,6 +382,7 @@ func init() {
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(startCmd)
+	rootCmd.AddCommand(fulfillFromFile)
 
 	balancesCmd.Flags().BoolP("all", "a", false, "Filter by fulfillment status")
 	rootCmd.AddCommand(balancesCmd)
