@@ -91,9 +91,9 @@ var startCmd = &cobra.Command{
 }
 
 var fulfillFromFile = &cobra.Command{
-	Use:   "fulfill-from-file",
-	Short: "Fulfill demand orders from a file",
-	Long:  `Fulfill demand orders from a file.`,
+	Use:   "fulfill-all",
+	Short: "Fulfill all demand orders",
+	Long:  `Fulfill all demand orders.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		viper.AutomaticEnv()
 
@@ -105,8 +105,6 @@ var fulfillFromFile = &cobra.Command{
 		if err := viper.Unmarshal(&config); err != nil {
 			log.Fatalf("failed to unmarshal config: %v", err)
 		}
-
-		log.Printf("using config file: %+v", viper.ConfigFileUsed())
 
 		sdkcfg := sdk.GetConfig()
 		sdkcfg.SetBech32PrefixForAccount(hubAddressPrefix, pubKeyPrefix)
@@ -168,8 +166,6 @@ var fulfillFromFile = &cobra.Command{
 			logger,
 		)
 
-		fmt.Println("Unfulfilled Orders:", len(res))
-
 		ids := make([]string, 0, len(res))
 		for _, order := range res {
 			if order.IsFullfilled {
@@ -177,6 +173,8 @@ var fulfillFromFile = &cobra.Command{
 			}
 			ids = append(ids, order.Id)
 		}
+
+		fmt.Println("Unfulfilled Orders:", len(ids))
 
 		batch := make([]string, 0, config.Bots.MaxOrdersPerTx)
 
