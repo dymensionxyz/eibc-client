@@ -178,9 +178,9 @@ func (oc *orderClient) start(ctx context.Context) error {
 	}
 
 	// start order fetcher
-	if err := oc.orderEventer.start(ctx); err != nil {
+	/*if err := oc.orderEventer.start(ctx); err != nil {
 		return fmt.Errorf("failed to subscribe to demand orders: %w", err)
-	}
+	}*/
 
 	// start order polling
 	if oc.orderPoller != nil {

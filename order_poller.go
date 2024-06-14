@@ -96,10 +96,10 @@ func (p *orderPoller) pollPendingDemandOrders(ctx context.Context) error {
 	orders, err := p.getDemandOrdersFromIndexer(ctx)
 	if err != nil {
 		p.logger.Error("failed to get demand orders from indexer. fallback to getting demand orders from the node", zap.Error(err))
-		orders, err = p.getDemandOrdersFromNode(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get demand orders: %w", err)
-		}
+		//orders, err = p.getDemandOrdersFromNode(ctx)
+		//if err != nil {
+		return fmt.Errorf("failed to get demand orders: %w", err)
+		//}
 	}
 
 	unfulfilledOrders := make([]*demandOrder, 0, len(orders))
