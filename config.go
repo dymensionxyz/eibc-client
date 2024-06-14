@@ -68,7 +68,7 @@ const (
 	defaultLogLevel          = "info"
 	defaultGasLimit          = 300000
 	defaultHubDenom          = "adym"
-	defaultGasFees           = "100000000000000000" + defaultHubDenom
+	defaultGasFees           = "3000000000000000" + defaultHubDenom
 	defaultMinimumGasBalance = "1000000000000000000" + defaultHubDenom
 	testKeyringBackend       = "test"
 
