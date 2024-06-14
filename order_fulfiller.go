@@ -108,11 +108,11 @@ func (ol *orderFulfiller) processBatch(ctx context.Context, batch []*demandOrder
 				return
 			}
 
-			fulfilledOrders := make([]*demandOrder, len(ids))
+			fulfilledOrders := make([]*demandOrder, 0, len(ids))
 
-			for i, order := range batch {
+			for _, order := range batch {
 				if slices.Contains(ids, order.id) {
-					fulfilledOrders[i] = order
+					fulfilledOrders = append(fulfilledOrders, order)
 					rewards = append(rewards, order.amount.String())
 				}
 			}
@@ -173,7 +173,7 @@ outer:
 		return fmt.Errorf("failed to fulfill orders: ids: %v; %w", ids, err)
 	}
 
-	ol.logger.Info("orders fulfilled", zap.Int("count", len(ids)))
+	ol.logger.Info("orders fulfilled", zap.Int("count", len(ids)), zap.String("from", batch[0].from))
 
 	return nil
 }
