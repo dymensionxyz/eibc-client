@@ -14,6 +14,8 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/ibc-go/v6/modules/apps/transfer/types"
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
+	commontypes "github.com/dymensionxyz/dymension/v3/x/common/types"
+	eibctypes "github.com/dymensionxyz/dymension/v3/x/eibc/types"
 	"go.uber.org/zap"
 )
 
@@ -47,7 +49,7 @@ func newOrderPoller(client cosmosclient.Client,
 		newOrders:     newOrders,
 		tracker:       tracker,
 		pathMap:       make(map[string]string),
-		indexerClient: &http.Client{Timeout: 25 * time.Second},
+		indexerClient: &http.Client{Timeout: 15 * time.Second},
 	}
 }
 
@@ -92,16 +94,16 @@ func (p *orderPoller) pollPendingDemandOrders(ctx context.Context) error {
 
 	orders, err := p.getDemandOrdersFromIndexer(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get demand orders: %w", err)
+		p.logger.Error("failed to get demand orders from indexer. fallback to getting demand orders from the node", zap.Error(err))
+		orders, err = p.getDemandOrdersFromNode(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get demand orders: %w", err)
+		}
 	}
 
 	unfulfilledOrders := make([]*demandOrder, 0, len(orders))
 
 	for _, d := range orders {
-		if !p.tracker.canFulfillOrder(d.EibcOrderId, d.Denom) {
-			continue
-		}
-
 		amountStr := fmt.Sprintf("%s%s", d.Amount, d.Denom)
 
 		totalAmount, err := sdk.ParseCoinNormalized(amountStr)
@@ -163,11 +165,15 @@ func (p *orderPoller) getDemandOrdersFromIndexer(ctx context.Context) ([]Order, 
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	var orders []Order
+	orders := make([]Order, 0, len(res.Data.IbcTransferDetails.Nodes))
 
 	// parse the time format of "1714742916108" into time.Time and sort by time
 	for _, order := range res.Data.IbcTransferDetails.Nodes {
 		if order.Time == "" {
+			continue
+		}
+
+		if p.tracker.isOrderFulfilled(order.EibcOrderId) {
 			continue
 		}
 
@@ -180,6 +186,10 @@ func (p *orderPoller) getDemandOrdersFromIndexer(ctx context.Context) ([]Order, 
 		denom, err := p.getDenomFromPath(ctx, order.Denom, order.DestinationChannel)
 		if err != nil {
 			p.logger.Error("failed to get denom hash", zap.String("d.Denom", order.Denom), zap.Error(err))
+			continue
+		}
+
+		if !p.tracker.canFulfillOrder(order.EibcOrderId, denom) {
 			continue
 		}
 
@@ -201,6 +211,46 @@ func (p *orderPoller) getDemandOrdersFromIndexer(ctx context.Context) ([]Order, 
 	})
 
 	return orders, nil
+}
+
+func (p *orderPoller) getDemandOrdersFromNode(ctx context.Context) ([]Order, error) {
+	res, err := p.getDemandOrdersByStatus(ctx, commontypes.Status_PENDING.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get demand orders: %w", err)
+	}
+
+	orders := make([]Order, 0, len(res))
+
+	for _, order := range res {
+		if len(order.Price) == 0 {
+			continue
+		}
+
+		denom := order.Price[0].Denom
+		if !p.tracker.canFulfillOrder(order.Id, denom) {
+			continue
+		}
+
+		newOrder := Order{
+			EibcOrderId: order.Id,
+			Denom:       denom,
+			Amount:      order.Price.String(),
+		}
+		orders = append(orders, newOrder)
+	}
+
+	return orders, nil
+}
+
+func (p *orderPoller) getDemandOrdersByStatus(ctx context.Context, status string) ([]*eibctypes.DemandOrder, error) {
+	queryClient := eibctypes.NewQueryClient(p.client.Context())
+	resp, err := queryClient.DemandOrdersByStatus(ctx, &eibctypes.QueryDemandOrdersByStatusRequest{
+		Status: status,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get demand orders: %w", err)
+	}
+	return resp.DemandOrders, nil
 }
 
 func (p *orderPoller) getDenomFromPath(ctx context.Context, path, destChannel string) (string, error) {
