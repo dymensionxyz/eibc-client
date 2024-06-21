@@ -10,7 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
-	"github.com/dymensionxyz/order-client/store"
+	"github.com/dymensionxyz/eibc-client/store"
 )
 
 func TestBotStore(t *testing.T) {
@@ -34,9 +34,7 @@ func TestBotStore(t *testing.T) {
 		require.NoError(t, pool.Purge(resource))
 	}()
 
-	var (
-		client *mongo.Client
-	)
+	var client *mongo.Client
 
 	ctx := context.Background()
 

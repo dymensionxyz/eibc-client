@@ -11,7 +11,7 @@ import (
 	tmtypes "github.com/tendermint/tendermint/rpc/core/types"
 	"go.uber.org/zap"
 
-	"github.com/dymensionxyz/order-client/store"
+	"github.com/dymensionxyz/eibc-client/store"
 )
 
 type orderTracker struct {

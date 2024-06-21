@@ -10,11 +10,11 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/dymensionxyz/order-client/store"
+	"github.com/dymensionxyz/eibc-client/store"
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "order-client",
+	Use:   "eibc-client",
 	Short: "eIBC Order client for Dymension Hub",
 	Long:  `Order client for Dymension Hub that scans for demand orders and fulfills them.`,
 	Run: func(cmd *cobra.Command, args []string) {

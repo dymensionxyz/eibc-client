@@ -90,7 +90,7 @@ func initConfig() {
 	if err != nil {
 		log.Fatalf("failed to get home directory: %v", err)
 	}
-	defaultHomeDir := home + "/.order-client"
+	defaultHomeDir := home + "/.eibc-client"
 
 	viper.SetDefault("log_level", defaultLogLevel)
 	viper.SetDefault("home_dir", defaultHomeDir)
