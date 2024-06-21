@@ -1,7 +1,6 @@
-version: '3.9'
+version: "3.9"
 
 services:
-
   eibc-init:
     build:
       context: .
@@ -9,7 +8,7 @@ services:
     command: ["./eibc-client", "init"]
     volumes:
       - ${CONFIG_PATH}:/app/config.yaml
-      - ${KEYRING_DIR}:/app/.order-client
+      - ${KEYRING_DIR}:/app/.eibc-client
 
   eibc-start:
     build:
@@ -21,8 +20,8 @@ services:
       - DB_PATH=mongodb://db:27017
     command: ["./eibc-client", "start", "--config", "/app/config.yaml"]
     volumes:
-     - ${CONFIG_PATH}:/app/config.yaml
-     - ${KEYRING_DIR}:/app/.order-client
+      - ${CONFIG_PATH}:/app/config.yaml
+      - ${KEYRING_DIR}:/app/.eibc-client
 
   eibc-funds:
     build:
@@ -32,10 +31,10 @@ services:
       - db
     environment:
       - DB_PATH=mongodb://db:27017
-    command: [ "./eibc-client", "funds", "--config", "/app/config.yaml" ]
+    command: ["./eibc-client", "funds", "--config", "/app/config.yaml"]
     volumes:
       - ${CONFIG_PATH}:/app/config.yaml
-      - ${KEYRING_DIR}:/app/.order-client
+      - ${KEYRING_DIR}:/app/.eibc-client
 
   db:
     image: mongo:7.0

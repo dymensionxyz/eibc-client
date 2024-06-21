@@ -16,7 +16,7 @@ import (
 
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 
-	"github.com/dymensionxyz/order-client/store"
+	"github.com/dymensionxyz/eibc-client/store"
 )
 
 type accountService struct {

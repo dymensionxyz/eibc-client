@@ -1,4 +1,4 @@
-module github.com/dymensionxyz/order-client
+module github.com/dymensionxyz/eibc-client
 
 go 1.22.2
 

@@ -1,6 +1,6 @@
-# Order-Client
+# eibc-client
 
-Order-Client is a bot designed to continuously scan for eIBC demand orders and fulfill them.
+eibc-client is a bot designed to continuously scan for eIBC demand orders and fulfill them.
 
 ## Features
 
@@ -33,7 +33,7 @@ To run the bot, use the following command:
 ```bash
 make install
 
-order-client --config <path-to-config-file>
+eibc-client --config <path-to-config-file>
 ```
 
 ### Docker
@@ -41,5 +41,5 @@ order-client --config <path-to-config-file>
 ```bash
 make docker-build
 
-docker run -v <path-to-config-file>:/.order-client.yaml order-client --config /.order-client.yaml
+docker run -v <path-to-config-file>:/.eibc-client.yaml eibc-client --config /.eibc-client.yaml
 ```
