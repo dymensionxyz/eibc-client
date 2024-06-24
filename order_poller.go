@@ -97,10 +97,10 @@ func (p *orderPoller) pollPendingDemandOrders(ctx context.Context) error {
 	orders, err := p.getDemandOrdersFromIndexer(ctx)
 	if err != nil {
 		p.logger.Error("failed to get demand orders from indexer. fallback to getting demand orders from the node", zap.Error(err))
-		// orders, err = p.getDemandOrdersFromNode(ctx)
-		// if err != nil {
-		return fmt.Errorf("failed to get demand orders: %w", err)
-		// }
+		orders, err = p.getDemandOrdersFromNode(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get demand orders: %w", err)
+		}
 	}
 
 	unfulfilledOrders := make([]*demandOrder, 0, len(orders))
@@ -252,7 +252,8 @@ func (p *orderPoller) getDemandOrdersFromNode(ctx context.Context) ([]Order, err
 func (p *orderPoller) getDemandOrdersByStatus(ctx context.Context, status string) ([]*eibctypes.DemandOrder, error) {
 	queryClient := eibctypes.NewQueryClient(p.client.Context())
 	resp, err := queryClient.DemandOrdersByStatus(ctx, &eibctypes.QueryDemandOrdersByStatusRequest{
-		Status: status,
+		Status:           commontypes.Status(commontypes.Status_value[strings.ToUpper(status)]),
+		FulfillmentState: eibctypes.FulfillmentState_UNFULFILLED,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get demand orders: %w", err)
