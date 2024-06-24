@@ -108,11 +108,11 @@ func (ol *orderFulfiller) processBatch(ctx context.Context, batch []*demandOrder
 				return
 			}
 
-			fulfilledOrders := make([]*demandOrder, len(ids))
+			fulfilledOrders := make([]*demandOrder, 0, len(ids))
 
-			for i, order := range batch {
+			for _, order := range batch {
 				if slices.Contains(ids, order.id) {
-					fulfilledOrders[i] = order
+					fulfilledOrders = append(fulfilledOrders, order)
 					rewards = append(rewards, order.amount.String())
 				}
 			}
@@ -135,12 +135,9 @@ func (ol *orderFulfiller) processBatch(ctx context.Context, batch []*demandOrder
 		coins = coins.Add(order.amount...)
 	}
 
-	ol.logger.Debug("ensuring balances for orders")
+	ol.logger.Debug("ensuring balances for orders", zap.String("from", batch[0].from))
 
-	ensuredDenoms, err := ol.accountSvc.ensureBalances(coins)
-	if err != nil {
-		return fmt.Errorf("failed to ensure balances: %w", err)
-	}
+	ensuredDenoms := ol.accountSvc.ensureBalances(coins)
 
 	if len(ensuredDenoms) > 0 {
 		ol.logger.Info("ensured balances for orders", zap.Strings("denoms", ensuredDenoms))
@@ -170,13 +167,13 @@ outer:
 		return nil
 	}
 
-	ol.logger.Info("fulfilling orders", zap.Int("count", len(ids)))
+	ol.logger.Info("fulfilling orders", zap.Int("count", len(ids)), zap.String("from", batch[0].from))
 
 	if err := ol.fulfillDemandOrders(ids...); err != nil {
 		return fmt.Errorf("failed to fulfill orders: ids: %v; %w", ids, err)
 	}
 
-	ol.logger.Info("orders fulfilled", zap.Int("count", len(ids)))
+	ol.logger.Info("orders fulfilled", zap.Int("count", len(ids)), zap.String("from", batch[0].from))
 
 	return nil
 }

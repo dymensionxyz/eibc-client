@@ -16,11 +16,10 @@ import (
 )
 
 type orderClient struct {
-	logger  *zap.Logger
-	config  Config
-	bots    map[string]*orderFulfiller
-	orderCh chan []*demandOrder
-	whale   *whale
+	logger *zap.Logger
+	config Config
+	bots   map[string]*orderFulfiller
+	whale  *whale
 
 	orderEventer *orderEventer
 	orderPoller  *orderPoller
@@ -154,7 +153,6 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		orderTracker: ordTracker,
 		bots:         bots,
 		whale:        whaleSvc,
-		orderCh:      orderCh,
 		config:       config,
 		logger:       logger,
 	}
