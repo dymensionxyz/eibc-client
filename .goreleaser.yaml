@@ -1,0 +1,34 @@
+version: 2
+project_name: eibc-client
+before:
+  hooks:
+    - go mod tidy
+builds:
+  - id: eibc-client
+    main: ./main.go
+    binary: eibc-client
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+changelog:
+  use: git
+  groups:
+    - title: Features
+      regexp: "^.*feat[(\\w)]*:+.*$"
+      order: 0
+    - title: 'Bug fixes'
+      regexp: "^.*fix[(\\w)]*:+.*$"
+      order: 1
+    - title: Others
+      order: 999
+  filters:
+    exclude:
+      - '^chore:'
+      - '^test:'
+      - '^ci:'
