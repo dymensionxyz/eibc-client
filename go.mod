@@ -10,12 +10,11 @@ require (
 	github.com/google/uuid v1.4.0
 	github.com/ignite/cli v0.25.2
 	github.com/mitchellh/go-homedir v1.1.0
-	github.com/ory/dockertest v3.3.5+incompatible
 	github.com/ory/dockertest/v3 v3.9.1
 	github.com/slack-go/slack v0.12.5
 	github.com/spf13/cobra v1.8.0
 	github.com/spf13/viper v1.15.0
-	github.com/stretchr/testify v1.8.4
+	github.com/stretchr/testify v1.9.0
 	github.com/tendermint/tendermint v0.34.29
 	go.mongodb.org/mongo-driver v1.15.0
 	go.uber.org/zap v1.24.0
