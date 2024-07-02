@@ -4,13 +4,12 @@ go 1.22.2
 
 require (
 	github.com/cosmos/cosmos-sdk v0.46.16
-	github.com/cosmos/ibc-go/v6 v6.2.1
+	github.com/cosmos/ibc-go/v6 v6.3.1
 	github.com/dymensionxyz/cosmosclient v0.4.2-beta
 	github.com/dymensionxyz/dymension/v3 v3.1.0-rc03.0.20240417155018-964ae3e745d1
 	github.com/google/uuid v1.4.0
 	github.com/ignite/cli v0.25.2
 	github.com/mitchellh/go-homedir v1.1.0
-	github.com/ory/dockertest v3.3.5+incompatible
 	github.com/ory/dockertest/v3 v3.9.1
 	github.com/slack-go/slack v0.12.5
 	github.com/spf13/cobra v1.8.0
