@@ -74,10 +74,10 @@ const (
 
 	botNamePrefix               = "bot-"
 	defaultWhaleAccountName     = "client"
-	defaultBotTopUpFactor       = 2
-	defaultNumberOfBots         = 1
+	defaultBotTopUpFactor       = 5
+	defaultNumberOfBots         = 30
 	newOrderBufferSize          = 100
-	defaultMaxOrdersPerTx       = 1
+	defaultMaxOrdersPerTx       = 10
 	defaultOrderRefreshInterval = 30 * time.Second
 )
 
