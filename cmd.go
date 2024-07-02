@@ -4,13 +4,16 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/mitchellh/go-homedir"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
 	"github.com/dymensionxyz/eibc-client/store"
+	utils "github.com/dymensionxyz/eibc-client/utils/viper"
 )
 
 var rootCmd = &cobra.Command{
@@ -208,7 +211,11 @@ var balancesCmd = &cobra.Command{
 
 		if !oc.whale.accountSvc.balances.IsZero() {
 			accPref := fmt.Sprintf("Whale | '%s': ", oc.whale.accountSvc.accountName)
-			printAccountSlot(oc.whale.accountSvc.account.GetAddress().String(), accPref, dividerItem)
+			printAccountSlot(
+				oc.whale.accountSvc.account.GetAddress().String(),
+				accPref,
+				dividerItem,
+			)
 			printBalances(oc.whale.accountSvc.balances, longestAmountStr, maxDen)
 			fmt.Println()
 		}
@@ -222,6 +229,43 @@ var balancesCmd = &cobra.Command{
 		fmt.Println(dividerFunds)
 		fmt.Println("Pending Rewards:")
 		printBalances(totalPendingRewards, longestAmountStr, maxDen)
+	},
+}
+
+var scaleCmd = &cobra.Command{
+	Use:   "scale [count]",
+	Short: "scale bot count",
+	Long:  `scale the number of bot accounts that fulfill the eibc orders`,
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		newBotCount, err := strconv.Atoi(args[0])
+		if err != nil {
+			return
+		}
+
+		home, err := homedir.Dir()
+		if err != nil {
+			log.Fatalf("failed to get home directory: %v", err)
+		}
+
+		defaultHomeDir := home + "/.eibc-client"
+		cfgFile = defaultHomeDir + "/config.yaml"
+
+		viper.SetConfigFile(cfgFile)
+		err = viper.ReadInConfig()
+		if err != nil {
+			return
+		}
+
+		err = utils.UpdateViperConfig("bots.number_of_bots", newBotCount, viper.ConfigFileUsed())
+		if err != nil {
+			return
+		}
+
+		fmt.Printf(
+			"bot count successfully scaled to %d, please restart the eibc process if it's running\n",
+			newBotCount,
+		)
 	},
 }
 
@@ -276,6 +320,7 @@ func init() {
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(startCmd)
+	rootCmd.AddCommand(scaleCmd)
 
 	balancesCmd.Flags().BoolP("all", "a", false, "Filter by fulfillment status")
 	rootCmd.AddCommand(balancesCmd)
