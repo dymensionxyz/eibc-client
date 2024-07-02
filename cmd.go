@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"github.com/dymensionxyz/eibc-client/cmd/version"
 	"github.com/dymensionxyz/eibc-client/store"
 )
 
@@ -208,7 +209,11 @@ var balancesCmd = &cobra.Command{
 
 		if !oc.whale.accountSvc.balances.IsZero() {
 			accPref := fmt.Sprintf("Whale | '%s': ", oc.whale.accountSvc.accountName)
-			printAccountSlot(oc.whale.accountSvc.account.GetAddress().String(), accPref, dividerItem)
+			printAccountSlot(
+				oc.whale.accountSvc.account.GetAddress().String(),
+				accPref,
+				dividerItem,
+			)
 			printBalances(oc.whale.accountSvc.balances, longestAmountStr, maxDen)
 			fmt.Println()
 		}
@@ -279,6 +284,8 @@ func init() {
 
 	balancesCmd.Flags().BoolP("all", "a", false, "Filter by fulfillment status")
 	rootCmd.AddCommand(balancesCmd)
+
+	rootCmd.AddCommand(version.Cmd())
 
 	cobra.OnInitialize(initConfig)
 
