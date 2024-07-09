@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"github.com/dymensionxyz/eibc-client/cmd/version"
 	"github.com/dymensionxyz/eibc-client/store"
 	utils "github.com/dymensionxyz/eibc-client/utils/viper"
 )
@@ -324,6 +325,8 @@ func init() {
 
 	balancesCmd.Flags().BoolP("all", "a", false, "Filter by fulfillment status")
 	rootCmd.AddCommand(balancesCmd)
+
+	rootCmd.AddCommand(version.Cmd())
 
 	cobra.OnInitialize(initConfig)
 
