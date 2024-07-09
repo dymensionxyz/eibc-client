@@ -24,6 +24,8 @@ jobs:
           pull-request-header: ":loop: New eibc-client Release"
           release-type: go
           package-name: eibc-client
+          prerelease: true
+          prerelease-label: beta
           changelog-types: >-
             [
               {"type":"feat","section":"Features","hidden":false},
