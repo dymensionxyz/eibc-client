@@ -100,14 +100,10 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) ([]*demand
 			continue
 		}
 
-		fee, err := sdk.ParseCoinNormalized(fees[i])
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse fee: %w", err)
-		}
-
 		order := &demandOrder{
 			id:     id,
-			amount: sdk.NewCoins(price.Add(fee)),
+			amount: sdk.NewCoins(price),
+			fee:    fees[i],
 			status: statuses[i],
 		}
 		newOrders = append(newOrders, order)

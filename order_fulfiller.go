@@ -6,10 +6,10 @@ import (
 	"slices"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	eibctypes "github.com/dymensionxyz/dymension/v3/x/eibc/types"
+	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 	"go.uber.org/zap"
 
-	"github.com/dymensionxyz/cosmosclient/cosmosclient"
+	"github.com/dymensionxyz/eibc-client/types"
 )
 
 type orderFulfiller struct {
@@ -52,7 +52,7 @@ func buildBot(
 	fulfilledCh chan *orderBatch,
 	topUpCh chan topUpRequest,
 ) (*orderFulfiller, error) {
-	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(clientCfg)...)
+	cosmosClient, err := cosmosclient.New(getCosmosClientOptions(clientCfg)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cosmos client for bot: %s;err: %w", name, err)
 	}
@@ -100,34 +100,8 @@ func (ol *orderFulfiller) fulfillOrders(ctx context.Context) {
 func (ol *orderFulfiller) processBatch(ctx context.Context, batch []*demandOrder) error {
 	var (
 		rewards, ids []string
+		demandOrders []*demandOrder
 	)
-
-	defer func() {
-		go func() {
-			if len(ids) == 0 {
-				return
-			}
-
-			fulfilledOrders := make([]*demandOrder, len(ids))
-
-			for i, order := range batch {
-				if slices.Contains(ids, order.id) {
-					fulfilledOrders[i] = order
-					rewards = append(rewards, order.amount.String())
-				}
-			}
-
-			// TODO: check if balances get updated before the new batch starts processing
-			if err := ol.accountSvc.updateFunds(ctx, addRewards(rewards...)); err != nil {
-				ol.logger.Error("failed to refresh balances", zap.Error(err))
-			}
-
-			ol.fulfilledOrdersCh <- &orderBatch{
-				orders:    fulfilledOrders,
-				fulfiller: ol.accountSvc.account.GetAddress().String(),
-			}
-		}()
-	}()
 
 	coins := sdk.NewCoins()
 
@@ -147,7 +121,7 @@ func (ol *orderFulfiller) processBatch(ctx context.Context, batch []*demandOrder
 	}
 
 	leftoverBatch := make([]string, 0, len(batch))
-	ids = make([]string, 0, len(batch))
+	demandOrders = make([]*demandOrder, 0, len(batch))
 
 outer:
 	for _, order := range batch {
@@ -158,6 +132,7 @@ outer:
 			}
 
 			ids = append(ids, order.id)
+			demandOrders = append(demandOrders, order)
 		}
 	}
 
@@ -172,23 +147,42 @@ outer:
 
 	ol.logger.Info("fulfilling orders", zap.Int("count", len(ids)))
 
-	if err := ol.fulfillDemandOrders(ids...); err != nil {
+	if err := ol.fulfillDemandOrders(demandOrders...); err != nil {
 		return fmt.Errorf("failed to fulfill orders: ids: %v; %w", ids, err)
 	}
 
 	ol.logger.Info("orders fulfilled", zap.Int("count", len(ids)))
 
+	go func() {
+		if len(ids) == 0 {
+			return
+		}
+
+		for _, order := range batch {
+			if slices.Contains(ids, order.id) {
+				rewards = append(rewards, order.amount.String())
+			}
+		}
+
+		// TODO: check if balances get updated before the new batch starts processing
+		if err := ol.accountSvc.updateFunds(ctx, addRewards(rewards...)); err != nil {
+			ol.logger.Error("failed to refresh balances", zap.Error(err))
+		}
+
+		ol.fulfilledOrdersCh <- &orderBatch{
+			orders:    demandOrders,
+			fulfiller: ol.accountSvc.account.GetAddress().String(),
+		}
+	}()
+
 	return nil
 }
 
-func (ol *orderFulfiller) fulfillDemandOrders(demandOrderID ...string) error {
-	msgs := make([]sdk.Msg, len(demandOrderID))
+func (ol *orderFulfiller) fulfillDemandOrders(demandOrder ...*demandOrder) error {
+	msgs := make([]sdk.Msg, len(demandOrder))
 
-	for i, id := range demandOrderID {
-		msgs[i] = &eibctypes.MsgFulfillOrder{
-			OrderId:          id,
-			FulfillerAddress: ol.accountSvc.account.GetAddress().String(),
-		}
+	for i, order := range demandOrder {
+		msgs[i] = types.NewMsgFulfillOrder(ol.accountSvc.account.GetAddress().String(), order.id, order.fee)
 	}
 
 	_, err := ol.client.BroadcastTx(ol.accountSvc.accountName, msgs...)

@@ -16,11 +16,10 @@ import (
 )
 
 type orderClient struct {
-	logger  *zap.Logger
-	config  Config
-	bots    map[string]*orderFulfiller
-	orderCh chan []*demandOrder
-	whale   *whale
+	logger *zap.Logger
+	config Config
+	bots   map[string]*orderFulfiller
+	whale  *whale
 
 	orderEventer *orderEventer
 	orderPoller  *orderPoller
@@ -52,7 +51,7 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		keyringBackend: config.Bots.KeyringBackend,
 	}
 
-	fetcherCosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(fetcherClientCfg)...)
+	fetcherCosmosClient, err := cosmosclient.New(getCosmosClientOptions(fetcherClientCfg)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cosmos client: %w", err)
 	}
@@ -154,7 +153,6 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		orderTracker: ordTracker,
 		bots:         bots,
 		whale:        whaleSvc,
-		orderCh:      orderCh,
 		config:       config,
 		logger:       logger,
 	}
@@ -217,7 +215,7 @@ func (oc *orderClient) start(ctx context.Context) error {
 }
 
 func addBotAccounts(ctx context.Context, numBots int, botConfig clientConfig, logger *zap.Logger) ([]string, error) {
-	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(botConfig)...)
+	cosmosClient, err := cosmosclient.New(getCosmosClientOptions(botConfig)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cosmos client for bot: %w", err)
 	}

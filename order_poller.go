@@ -31,7 +31,8 @@ type orderPoller struct {
 	pathMap map[string]string
 }
 
-func newOrderPoller(client cosmosclient.Client,
+func newOrderPoller(
+	client cosmosclient.Client,
 	tracker *orderTracker,
 	pollingCfg OrderPollingConfig,
 	batchSize int,
@@ -59,6 +60,7 @@ type Order struct {
 	EibcOrderId        string `json:"eibcOrderId"`
 	Denom              string `json:"denom"`
 	Amount             string `json:"amount"`
+	Fee                string `json:"fee"`
 	DestinationChannel string `json:"destinationChannel"`
 	Time               string `json:"time"`
 	time               time.Time
@@ -112,6 +114,7 @@ func (p *orderPoller) pollPendingDemandOrders(ctx context.Context) error {
 		order := &demandOrder{
 			id:     d.EibcOrderId,
 			amount: sdk.NewCoins(totalAmount),
+			fee:    d.Fee,
 		}
 		unfulfilledOrders = append(unfulfilledOrders, order)
 	}
@@ -183,10 +186,16 @@ func (p *orderPoller) getDemandOrdersFromIndexer(ctx context.Context) ([]Order, 
 			continue
 		}
 
+		if order.Fee == "" {
+			p.logger.Warn("order fee is empty", zap.String("order", order.EibcOrderId))
+			continue
+		}
+
 		newOrder := Order{
 			EibcOrderId:        order.EibcOrderId,
 			Denom:              denom,
 			Amount:             order.Amount,
+			Fee:                order.Fee,
 			DestinationChannel: order.DestinationChannel,
 			Time:               order.Time,
 			time:               time.Unix(timeUnix/1000, (timeUnix%1000)*int64(time.Millisecond)),
