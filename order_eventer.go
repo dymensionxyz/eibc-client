@@ -113,7 +113,7 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) ([]*demand
 }
 
 func (e *orderEventer) subscribeToPendingDemandOrders(ctx context.Context) error {
-	const query = "eibc.is_fulfilled='false'"
+	const query = "dymensionxyz.dymension.eibc.EventDemandOrderCreated.is_fulfilled='false'"
 
 	resCh, err := e.client.RPC.Subscribe(ctx, "", query)
 	if err != nil {
