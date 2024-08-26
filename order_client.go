@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"slices"
 
@@ -56,6 +57,8 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		return nil, fmt.Errorf("failed to create cosmos client: %w", err)
 	}
 
+	subscriberID := fmt.Sprintf("eibc-client-%d", rand.Int())
+
 	orderCh := make(chan []*demandOrder, newOrderBufferSize)
 
 	db, err := store.NewDB(ctx, config.DBPath)
@@ -71,10 +74,18 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		denomsWhitelist[denom] = struct{}{}
 	}
 
-	ordTracker := newOrderTracker(fetcherCosmosClient, bstore, fulfilledOrdersCh, denomsWhitelist, logger)
+	ordTracker := newOrderTracker(
+		fetcherCosmosClient,
+		bstore,
+		fulfilledOrdersCh,
+		subscriberID,
+		denomsWhitelist,
+		logger,
+	)
 
 	eventer := newOrderEventer(
 		fetcherCosmosClient,
+		subscriberID,
 		ordTracker,
 		config.Bots.MaxOrdersPerTx,
 		orderCh,
@@ -173,10 +184,6 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 
 func (oc *orderClient) start(ctx context.Context) error {
 	oc.logger.Info("starting demand order fetcher...")
-	if err := oc.orderEventer.client.RPC.Start(); err != nil {
-		return fmt.Errorf("failed to start rpc client: %w", err)
-	}
-
 	// start order fetcher
 	if err := oc.orderEventer.start(ctx); err != nil {
 		return fmt.Errorf("failed to subscribe to demand orders: %w", err)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"strings"
 	"sync"
 
@@ -25,6 +26,7 @@ type orderTracker struct {
 	trackedOrders     map[string]struct{}
 	denomsWhitelist   map[string]struct{}
 	fulfilledOrdersCh chan *orderBatch
+	subscriberID      string
 }
 
 type botStore interface {
@@ -42,6 +44,7 @@ func newOrderTracker(
 	client cosmosclient.Client,
 	store botStore,
 	fulfilledOrdersCh chan *orderBatch,
+	subscriberID string,
 	denomsWhitelist map[string]struct{},
 	logger *zap.Logger,
 ) *orderTracker {
@@ -52,6 +55,7 @@ func newOrderTracker(
 		fulfilledOrdersCh: fulfilledOrdersCh,
 		denomsWhitelist:   denomsWhitelist,
 		logger:            logger.With(zap.String("module", "order-resolver")),
+		subscriberID:      subscriberID,
 		trackedOrders:     make(map[string]struct{}),
 	}
 }
@@ -164,10 +168,13 @@ func (or *orderTracker) isOrderCurrent(id string) bool {
 	return ok
 }
 
-func (or *orderTracker) waitForFinalizedOrder(ctx context.Context) error {
-	const query = "eibc.is_fulfilled='true' AND eibc.packet_status='FINALIZED'"
+const finalizedEvent = "dymensionxyz.dymension.eibc.EventDemandOrderPacketStatusUpdated"
 
-	resCh, err := or.client.RPC.Subscribe(ctx, "", query)
+func (or *orderTracker) waitForFinalizedOrder(ctx context.Context) error {
+	// TODO: should filter by fulfiller (one of the bots)?
+	var query = fmt.Sprintf("%s.is_fulfilled='true' AND %s.new_packet_status='FINALIZED'", finalizedEvent, finalizedEvent)
+
+	resCh, err := or.client.RPC.Subscribe(ctx, fmt.Sprintf("eibc-client-%d", rand.Int()), query)
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to demand orders: %w", err)
 	}
@@ -189,7 +196,7 @@ func (or *orderTracker) waitForFinalizedOrder(ctx context.Context) error {
 }
 
 func (or *orderTracker) finalizeOrder(ctx context.Context, res tmtypes.ResultEvent) error {
-	ids := res.Events["eibc.id"]
+	ids := res.Events[finalizedEvent+".order_id"]
 
 	if len(ids) == 0 {
 		return nil

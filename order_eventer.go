@@ -15,28 +15,35 @@ type orderEventer struct {
 	client cosmosclient.Client
 	logger *zap.Logger
 
-	batchSize int
-	newOrders chan []*demandOrder
-	tracker   *orderTracker
+	batchSize    int
+	newOrders    chan []*demandOrder
+	tracker      *orderTracker
+	subscriberID string
 }
 
 func newOrderEventer(
 	client cosmosclient.Client,
+	subscriberID string,
 	tracker *orderTracker,
 	batchSize int,
 	newOrders chan []*demandOrder,
 	logger *zap.Logger,
 ) *orderEventer {
 	return &orderEventer{
-		client:    client,
-		batchSize: batchSize,
-		logger:    logger.With(zap.String("module", "order-eventer")),
-		newOrders: newOrders,
-		tracker:   tracker,
+		client:       client,
+		subscriberID: subscriberID,
+		batchSize:    batchSize,
+		logger:       logger.With(zap.String("module", "order-eventer")),
+		newOrders:    newOrders,
+		tracker:      tracker,
 	}
 }
 
 func (e *orderEventer) start(ctx context.Context) error {
+	if err := e.client.RPC.Start(); err != nil {
+		return fmt.Errorf("start rpc client: %w", err)
+	}
+
 	if err := e.subscribeToPendingDemandOrders(ctx); err != nil {
 		return fmt.Errorf("failed to subscribe to pending demand orders: %w", err)
 	}
@@ -78,16 +85,18 @@ func (e *orderEventer) enqueueEventOrders(res tmtypes.ResultEvent) error {
 	return nil
 }
 
+const createdEvent = "dymensionxyz.dymension.eibc.EventDemandOrderCreated"
+
 func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) ([]*demandOrder, error) {
-	ids := res.Events["eibc.id"]
+	ids := res.Events[createdEvent+".order_id"]
 
 	if len(ids) == 0 {
 		return nil, nil
 	}
 
-	prices := res.Events["eibc.price"]
-	fees := res.Events["eibc.fee"]
-	statuses := res.Events["eibc.packet_status"]
+	prices := res.Events[createdEvent+".price"]
+	fees := res.Events[createdEvent+".fee"]
+	statuses := res.Events[createdEvent+".packet_status"]
 	newOrders := make([]*demandOrder, 0, len(ids))
 
 	for i, id := range ids {
@@ -113,9 +122,9 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) ([]*demand
 }
 
 func (e *orderEventer) subscribeToPendingDemandOrders(ctx context.Context) error {
-	const query = "dymensionxyz.dymension.eibc.EventDemandOrderCreated.is_fulfilled='false'"
+	const query = createdEvent + ".is_fulfilled='false'"
 
-	resCh, err := e.client.RPC.Subscribe(ctx, "", query)
+	resCh, err := e.client.WSEvents.Subscribe(ctx, e.subscriberID, query)
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to demand orders: %w", err)
 	}
