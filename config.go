@@ -41,7 +41,7 @@ type botConfig struct {
 	NumberOfBots   int                          `mapstructure:"number_of_bots"`
 	KeyringBackend cosmosaccount.KeyringBackend `mapstructure:"keyring_backend"`
 	KeyringDir     string                       `mapstructure:"keyring_dir"`
-	TopUpFactor    uint64                       `mapstructure:"top_up_factor"`
+	TopUpFactor    int                          `mapstructure:"top_up_factor"`
 	MaxOrdersPerTx int                          `mapstructure:"max_orders_per_tx"`
 }
 

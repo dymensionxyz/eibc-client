@@ -36,7 +36,8 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		return nil, fmt.Errorf("failed to create logger: %w", err)
 	}
 
-	defer logger.Sync() // Ensure all logs are written
+	// Ensure all logs are written
+	defer logger.Sync() // nolint: errcheck
 
 	minGasBalance, err := sdk.ParseCoinNormalized(config.Gas.MinimumGasBalance)
 	if err != nil {

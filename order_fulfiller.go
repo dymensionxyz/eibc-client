@@ -17,9 +17,8 @@ type orderFulfiller struct {
 	client     cosmosclient.Client
 	logger     *zap.Logger
 
-	newOrdersCh                chan []*demandOrder
-	fulfilledOrdersCh          chan<- *orderBatch
-	orderDisputePeriodInBlocks uint64
+	newOrdersCh       chan []*demandOrder
+	fulfilledOrdersCh chan<- *orderBatch
 }
 
 func newOrderFulfiller(
