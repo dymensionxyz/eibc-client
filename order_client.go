@@ -57,6 +57,7 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		return nil, fmt.Errorf("failed to create cosmos client: %w", err)
 	}
 
+	//nolint:gosec
 	subscriberID := fmt.Sprintf("eibc-client-%d", rand.Int())
 
 	orderCh := make(chan []*demandOrder, newOrderBufferSize)

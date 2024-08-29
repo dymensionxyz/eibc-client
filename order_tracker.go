@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"strings"
 	"sync"
 
@@ -174,7 +173,7 @@ func (or *orderTracker) waitForFinalizedOrder(ctx context.Context) error {
 	// TODO: should filter by fulfiller (one of the bots)?
 	var query = fmt.Sprintf("%s.is_fulfilled='true' AND %s.new_packet_status='FINALIZED'", finalizedEvent, finalizedEvent)
 
-	resCh, err := or.client.RPC.Subscribe(ctx, fmt.Sprintf("eibc-client-%d", rand.Int()), query)
+	resCh, err := or.client.RPC.Subscribe(ctx, or.subscriberID, query)
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to demand orders: %w", err)
 	}
