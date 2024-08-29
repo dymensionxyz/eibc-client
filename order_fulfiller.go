@@ -181,7 +181,7 @@ func (ol *orderFulfiller) fulfillDemandOrders(demandOrder ...*demandOrder) error
 	msgs := make([]sdk.Msg, len(demandOrder))
 
 	for i, order := range demandOrder {
-		msgs[i] = types.NewMsgFulfillOrder(ol.accountSvc.account.GetAddress().String(), order.id, order.fee)
+		msgs[i] = types.NewMsgFulfillOrder(ol.accountSvc.account.GetAddress().String(), order.id, order.fee.String())
 	}
 
 	_, err := ol.client.BroadcastTx(ol.accountSvc.accountName, msgs...)
