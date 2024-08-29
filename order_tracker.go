@@ -171,7 +171,7 @@ const finalizedEvent = "dymensionxyz.dymension.eibc.EventDemandOrderPacketStatus
 
 func (or *orderTracker) waitForFinalizedOrder(ctx context.Context) error {
 	// TODO: should filter by fulfiller (one of the bots)?
-	var query = fmt.Sprintf("%s.is_fulfilled='true' AND %s.new_packet_status='FINALIZED'", finalizedEvent, finalizedEvent)
+	query := fmt.Sprintf("%s.is_fulfilled='true' AND %s.new_packet_status='FINALIZED'", finalizedEvent, finalizedEvent)
 
 	resCh, err := or.client.RPC.Subscribe(ctx, or.subscriberID, query)
 	if err != nil {
