@@ -4,7 +4,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 	"github.com/ignite/cli/ignite/pkg/cosmosaccount"
 	"github.com/mitchellh/go-homedir"
@@ -42,7 +41,7 @@ type botConfig struct {
 	NumberOfBots   int                          `mapstructure:"number_of_bots"`
 	KeyringBackend cosmosaccount.KeyringBackend `mapstructure:"keyring_backend"`
 	KeyringDir     string                       `mapstructure:"keyring_dir"`
-	TopUpFactor    uint64                       `mapstructure:"top_up_factor"`
+	TopUpFactor    int                          `mapstructure:"top_up_factor"`
 	MaxOrdersPerTx int                          `mapstructure:"max_orders_per_tx"`
 }
 
@@ -66,7 +65,6 @@ const (
 	hubAddressPrefix         = "dym"
 	pubKeyPrefix             = "pub"
 	defaultLogLevel          = "info"
-	defaultGasLimit          = 300000
 	defaultHubDenom          = "adym"
 	defaultGasFees           = "3000000000000000" + defaultHubDenom
 	defaultMinimumGasBalance = "1000000000000000000" + defaultHubDenom
@@ -142,10 +140,8 @@ func getCosmosClientOptions(config clientConfig) []cosmosclient.Option {
 	options := []cosmosclient.Option{
 		cosmosclient.WithAddressPrefix(hubAddressPrefix),
 		cosmosclient.WithHome(config.homeDir),
-		cosmosclient.WithBroadcastMode(flags.BroadcastBlock),
 		cosmosclient.WithNodeAddress(config.nodeAddress),
 		cosmosclient.WithFees(config.gasFees),
-		cosmosclient.WithGasLimit(defaultGasLimit),
 		cosmosclient.WithGasPrices(config.gasPrices),
 		cosmosclient.WithKeyringBackend(config.keyringBackend),
 		cosmosclient.WithKeyringDir(config.homeDir),

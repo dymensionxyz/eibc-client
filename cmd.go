@@ -43,7 +43,7 @@ var initCmd = &cobra.Command{
 
 		// if home dir doesn't exist, create it
 		if _, err := os.Stat(config.HomeDir); os.IsNotExist(err) {
-			if err := os.MkdirAll(config.HomeDir, 0755); err != nil {
+			if err := os.MkdirAll(config.HomeDir, 0o755); err != nil {
 				log.Fatalf("failed to create home directory: %v", err)
 			}
 		}

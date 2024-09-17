@@ -27,7 +27,7 @@ type accountService struct {
 	balances          sdk.Coins
 	minimumGasBalance sdk.Coin
 	accountName       string
-	topUpFactor       uint64
+	topUpFactor       int
 	topUpCh           chan<- topUpRequest
 }
 
@@ -38,7 +38,7 @@ type accountStore interface {
 
 type option func(*accountService)
 
-func withTopUpFactor(topUpFactor uint64) option {
+func withTopUpFactor(topUpFactor int) option {
 	return func(s *accountService) {
 		s.topUpFactor = topUpFactor
 	}

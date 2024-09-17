@@ -12,6 +12,7 @@ type orderBatch struct {
 type demandOrder struct {
 	id     string
 	amount sdk.Coins
+	fee    string
 	status string
 }
 

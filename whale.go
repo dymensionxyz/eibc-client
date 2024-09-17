@@ -76,7 +76,7 @@ func buildWhale(
 		balanceThresholdMap[denom] = coin
 	}
 
-	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(clientCfg)...)
+	cosmosClient, err := cosmosclient.New(getCosmosClientOptions(clientCfg)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cosmos client for whale: %w", err)
 	}

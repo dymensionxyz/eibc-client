@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"slices"
 
@@ -16,11 +17,10 @@ import (
 )
 
 type orderClient struct {
-	logger  *zap.Logger
-	config  Config
-	bots    map[string]*orderFulfiller
-	orderCh chan []*demandOrder
-	whale   *whale
+	logger *zap.Logger
+	config Config
+	bots   map[string]*orderFulfiller
+	whale  *whale
 
 	orderEventer *orderEventer
 	orderPoller  *orderPoller
@@ -36,7 +36,8 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		return nil, fmt.Errorf("failed to create logger: %w", err)
 	}
 
-	defer logger.Sync() // Ensure all logs are written
+	// Ensure all logs are written
+	defer logger.Sync() // nolint: errcheck
 
 	minGasBalance, err := sdk.ParseCoinNormalized(config.Gas.MinimumGasBalance)
 	if err != nil {
@@ -52,10 +53,13 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		keyringBackend: config.Bots.KeyringBackend,
 	}
 
-	fetcherCosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(fetcherClientCfg)...)
+	fetcherCosmosClient, err := cosmosclient.New(getCosmosClientOptions(fetcherClientCfg)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cosmos client: %w", err)
 	}
+
+	//nolint:gosec
+	subscriberID := fmt.Sprintf("eibc-client-%d", rand.Int())
 
 	orderCh := make(chan []*demandOrder, newOrderBufferSize)
 
@@ -72,10 +76,18 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		denomsWhitelist[denom] = struct{}{}
 	}
 
-	ordTracker := newOrderTracker(fetcherCosmosClient, bstore, fulfilledOrdersCh, denomsWhitelist, logger)
+	ordTracker := newOrderTracker(
+		fetcherCosmosClient,
+		bstore,
+		fulfilledOrdersCh,
+		subscriberID,
+		denomsWhitelist,
+		logger,
+	)
 
 	eventer := newOrderEventer(
 		fetcherCosmosClient,
+		subscriberID,
 		ordTracker,
 		config.Bots.MaxOrdersPerTx,
 		orderCh,
@@ -154,7 +166,6 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		orderTracker: ordTracker,
 		bots:         bots,
 		whale:        whaleSvc,
-		orderCh:      orderCh,
 		config:       config,
 		logger:       logger,
 	}
@@ -175,10 +186,6 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 
 func (oc *orderClient) start(ctx context.Context) error {
 	oc.logger.Info("starting demand order fetcher...")
-	if err := oc.orderEventer.client.RPC.Start(); err != nil {
-		return fmt.Errorf("failed to start rpc client: %w", err)
-	}
-
 	// start order fetcher
 	if err := oc.orderEventer.start(ctx); err != nil {
 		return fmt.Errorf("failed to subscribe to demand orders: %w", err)
@@ -217,7 +224,7 @@ func (oc *orderClient) start(ctx context.Context) error {
 }
 
 func addBotAccounts(ctx context.Context, numBots int, botConfig clientConfig, logger *zap.Logger) ([]string, error) {
-	cosmosClient, err := cosmosclient.New(ctx, getCosmosClientOptions(botConfig)...)
+	cosmosClient, err := cosmosclient.New(getCosmosClientOptions(botConfig)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cosmos client for bot: %w", err)
 	}
