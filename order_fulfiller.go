@@ -7,9 +7,8 @@ import (
 	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	"go.uber.org/zap"
-
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
+	"go.uber.org/zap"
 
 	"github.com/dymensionxyz/eibc-client/types"
 )
@@ -185,16 +184,7 @@ func (ol *orderFulfiller) fulfillDemandOrders(demandOrder ...*demandOrder) error
 	msgs := make([]sdk.Msg, len(demandOrder))
 
 	for i, order := range demandOrder {
-		if order.fee == "" {
-			continue
-		}
-		fee, err := sdk.ParseCoinNormalized(order.fee)
-		if err != nil {
-			return fmt.Errorf("failed to parse fee: %w", err)
-		}
-		feeAmount := fee.Amount.String()
-
-		msgs[i] = types.NewMsgFulfillOrder(ol.accountSvc.account.GetAddress().String(), order.id, feeAmount)
+		msgs[i] = types.NewMsgFulfillOrder(ol.accountSvc.account.GetAddress().String(), order.id, order.feeStr)
 	}
 
 	_, err := ol.client.BroadcastTx(ol.accountSvc.accountName, msgs...)
