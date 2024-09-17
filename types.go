@@ -16,6 +16,7 @@ type demandOrder struct {
 	denom       string
 	amount      sdk.Coins
 	fee         sdk.Coins
+	feeStr      string
 	rollappId   string
 	status      string
 	blockHeight uint64
@@ -36,6 +37,8 @@ func (o *demandOrder) feePercentage() float32 {
 	if err != nil {
 		panic(err)
 	}
+
+	o.feeStr = fee.String()
 
 	feeProportion, _ := new(big.Float).Quo(fee, price).Float32()
 	feePercent := feeProportion * 100

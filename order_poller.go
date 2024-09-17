@@ -138,10 +138,13 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 			continue
 		}
 
-		blockHeight, err := strconv.ParseUint(order.BlockHeight, 10, 64)
-		if err != nil {
-			p.logger.Error("failed to parse block height", zap.Error(err))
-			continue
+		var blockHeight uint64
+		if order.BlockHeight != "" {
+			blockHeight, err = strconv.ParseUint(order.BlockHeight, 10, 64)
+			if err != nil {
+				p.logger.Error("failed to parse block height", zap.Error(err))
+				continue
+			}
 		}
 
 		newOrder := &demandOrder{
