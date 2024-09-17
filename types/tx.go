@@ -31,6 +31,10 @@ func (msg *MsgFulfillOrder) Type() string {
 	return sdk.MsgTypeURL(msg)
 }
 
+func (*MsgFulfillOrder) XXX_MessageName() string {
+	return "dymensionxyz.dymension.eibc.MsgFulfillOrder"
+}
+
 func (msg *MsgFulfillOrder) GetSigners() []sdk.AccAddress {
 	creator, err := sdk.AccAddressFromBech32(msg.FulfillerAddress)
 	if err != nil {
