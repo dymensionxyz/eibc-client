@@ -33,12 +33,12 @@ func (o *demandOrder) feePercentage() float32 {
 		panic(err)
 	}
 
-	fee, _, err := big.ParseFloat(o.fee.AmountOf(o.denom).String(), 10, 64, big.ToNearestEven)
+	o.feeStr = o.fee.AmountOf(o.denom).String()
+
+	fee, _, err := big.ParseFloat(o.feeStr, 10, 64, big.ToNearestEven)
 	if err != nil {
 		panic(err)
 	}
-
-	o.feeStr = fee.String()
 
 	feeProportion, _ := new(big.Float).Quo(fee, price).Float32()
 	feePercent := feeProportion * 100
