@@ -7,7 +7,7 @@ require (
 	github.com/cosmos/cosmos-sdk v0.46.16
 	github.com/cosmos/gogoproto v1.5.0
 	github.com/cosmos/ibc-go/v6 v6.2.1
-	github.com/dymensionxyz/cosmosclient v0.4.2-beta.0.20240807121611-4f3f13b5ad2b
+	github.com/dymensionxyz/cosmosclient v0.4.2-beta.0.20240821141048-7a6b0d748908
 	github.com/google/uuid v1.6.0
 	github.com/ignite/cli v0.26.1
 	github.com/mitchellh/go-homedir v1.1.0

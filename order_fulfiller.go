@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
@@ -143,6 +144,8 @@ outer:
 		)
 		return nil
 	}
+
+	time.Sleep(7 * time.Second)
 
 	ol.logger.Info("fulfilling orders", zap.Int("count", len(ids)))
 
