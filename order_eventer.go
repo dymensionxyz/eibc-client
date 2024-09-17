@@ -15,27 +15,27 @@ type orderEventer struct {
 	client cosmosclient.Client
 	logger *zap.Logger
 
-	batchSize    int
-	newOrders    chan []*demandOrder
-	tracker      *orderTracker
-	subscriberID string
+	batchSize       int
+	newOrders       chan []*demandOrder
+	canFulfillOrder func(*demandOrder) bool
+	subscriberID    string
 }
 
 func newOrderEventer(
 	client cosmosclient.Client,
 	subscriberID string,
-	tracker *orderTracker,
+	canFulfillOrder func(*demandOrder) bool,
 	batchSize int,
 	newOrders chan []*demandOrder,
 	logger *zap.Logger,
 ) *orderEventer {
 	return &orderEventer{
-		client:       client,
-		subscriberID: subscriberID,
-		batchSize:    batchSize,
-		logger:       logger.With(zap.String("module", "order-eventer")),
-		newOrders:    newOrders,
-		tracker:      tracker,
+		client:          client,
+		subscriberID:    subscriberID,
+		batchSize:       batchSize,
+		logger:          logger.With(zap.String("module", "order-eventer")),
+		newOrders:       newOrders,
+		canFulfillOrder: canFulfillOrder,
 	}
 }
 
@@ -52,10 +52,7 @@ func (e *orderEventer) start(ctx context.Context) error {
 }
 
 func (e *orderEventer) enqueueEventOrders(res tmtypes.ResultEvent) error {
-	newOrders, err := e.parseOrdersFromEvents(res)
-	if err != nil {
-		return fmt.Errorf("failed to parse orders from events: %w", err)
-	}
+	newOrders := e.parseOrdersFromEvents(res)
 
 	if e.logger.Level() <= zap.DebugLevel {
 		ids := make([]string, 0, len(newOrders))
@@ -87,11 +84,11 @@ func (e *orderEventer) enqueueEventOrders(res tmtypes.ResultEvent) error {
 
 const createdEvent = "dymensionxyz.dymension.eibc.EventDemandOrderCreated"
 
-func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) ([]*demandOrder, error) {
+func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandOrder {
 	ids := res.Events[createdEvent+".order_id"]
 
 	if len(ids) == 0 {
-		return nil, nil
+		return nil
 	}
 
 	prices := res.Events[createdEvent+".price"]
@@ -100,25 +97,34 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) ([]*demand
 	newOrders := make([]*demandOrder, 0, len(ids))
 
 	for i, id := range ids {
-		price, err := sdk.ParseCoinNormalized(prices[i])
+		price, err := sdk.ParseCoinsNormalized(prices[i])
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse price: %w", err)
+			e.logger.Error("failed to parse price", zap.Error(err))
+			continue
 		}
 
-		if !e.tracker.canFulfillOrder(id, price.Denom) {
+		fee, err := sdk.ParseCoinsNormalized(fees[i])
+		if err != nil {
+			e.logger.Error("failed to parse fee", zap.Error(err))
 			continue
 		}
 
 		order := &demandOrder{
 			id:     id,
-			amount: sdk.NewCoins(price),
-			fee:    fees[i],
+			denom:  fee.GetDenomByIndex(0),
+			amount: price,
+			fee:    fee,
 			status: statuses[i],
 		}
+
+		if !e.canFulfillOrder(order) {
+			continue
+		}
+
 		newOrders = append(newOrders, order)
 	}
 
-	return newOrders, nil
+	return newOrders
 }
 
 func (e *orderEventer) subscribeToPendingDemandOrders(ctx context.Context) error {

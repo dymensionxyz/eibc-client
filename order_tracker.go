@@ -23,7 +23,7 @@ type orderTracker struct {
 	currentOrders     map[string]struct{}
 	tomu              sync.Mutex
 	trackedOrders     map[string]struct{}
-	denomsWhitelist   map[string]struct{}
+	fulfillCriteria   *fulfillCriteria
 	fulfilledOrdersCh chan *orderBatch
 	subscriberID      string
 }
@@ -44,7 +44,7 @@ func newOrderTracker(
 	store botStore,
 	fulfilledOrdersCh chan *orderBatch,
 	subscriberID string,
-	denomsWhitelist map[string]struct{},
+	fCriteria *fulfillCriteria,
 	logger *zap.Logger,
 ) *orderTracker {
 	return &orderTracker{
@@ -52,7 +52,7 @@ func newOrderTracker(
 		store:             store,
 		currentOrders:     make(map[string]struct{}),
 		fulfilledOrdersCh: fulfilledOrdersCh,
-		denomsWhitelist:   denomsWhitelist,
+		fulfillCriteria:   fCriteria,
 		logger:            logger.With(zap.String("module", "order-resolver")),
 		subscriberID:      subscriberID,
 		trackedOrders:     make(map[string]struct{}),
@@ -131,21 +131,26 @@ func (or *orderTracker) addFulfilledOrders(ctx context.Context, batch *orderBatc
 	return nil
 }
 
-func (or *orderTracker) canFulfillOrder(id, denom string) bool {
-	// exclude orders whose denoms are not in the whitelist
-	if _, found := or.denomsWhitelist[strings.ToLower(denom)]; !found {
+func (or *orderTracker) canFulfillOrder(order *demandOrder) bool {
+	return !or.isOrderFulfilled(order.id) &&
+		!or.isOrderCurrent(order.id) &&
+		or.checkFeePercentage(order)
+}
+
+func (or *orderTracker) checkFeePercentage(order *demandOrder) bool {
+	assetMinPercentage, ok := or.fulfillCriteria.MinFeePercentage.Asset[strings.ToLower(order.denom)]
+	if !ok {
 		return false
 	}
 
-	if or.isOrderFulfilled(id) {
+	chainMinPercentage, ok := or.fulfillCriteria.MinFeePercentage.Chain[order.rollappId]
+	if !ok {
 		return false
 	}
 
-	if or.isOrderCurrent(id) {
-		return false
-	}
-
-	return true
+	feePercentage := order.feePercentage()
+	okFee := feePercentage >= assetMinPercentage && feePercentage >= chainMinPercentage
+	return okFee
 }
 
 func (or *orderTracker) isOrderFulfilled(id string) bool {
