@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/crypto/keyring"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/cosmos/cosmos-sdk/types/tx"
 	"github.com/cosmos/cosmos-sdk/x/auth/types"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	"github.com/google/uuid"
@@ -210,8 +212,38 @@ func (a *accountService) sendCoins(coins sdk.Coins, toAddrStr string) error {
 		coins,
 	)
 
-	_, err = a.client.BroadcastTx(a.accountName, msg)
-	return err
+	rsp, err := a.client.BroadcastTx(a.accountName, msg)
+	if err != nil {
+		return fmt.Errorf("failed to broadcast tx: %w", err)
+	}
+
+	if err = a.WaitForTx(rsp.TxHash); err != nil {
+		return fmt.Errorf("failed to wait for tx: %w", err)
+	}
+
+	return nil
+}
+
+func (a *accountService) WaitForTx(txHash string) error {
+	serviceClient := tx.NewServiceClient(a.client.Context())
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timed out waiting for tx %s", txHash)
+		default:
+			resp, err := serviceClient.GetTx(ctx, &tx.GetTxRequest{Hash: txHash})
+			if err != nil {
+				return fmt.Errorf("failed to get tx: %w", err)
+			}
+			if resp.TxResponse.Code == 0 {
+				return nil
+			}
+			time.Sleep(time.Second)
+		}
+	}
 }
 
 func (a *accountService) balanceOf(denom string) sdk.Int {
