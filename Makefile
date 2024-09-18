@@ -25,7 +25,7 @@ all: install
 .PHONY: install
 install: build
 	@echo "--> installing eibc-client"
-	mv build/eibc $(GOPATH)/bin/eibc-client
+	mv build/eibc-client $(GOPATH)/bin/eibc-client
 
 .PHONY: build
 build: go.sum ## Compiles the eibc binary
