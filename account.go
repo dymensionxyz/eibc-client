@@ -211,6 +211,7 @@ func (a *accountService) sendCoins(coins sdk.Coins, toAddrStr string) error {
 		toAddr,
 		coins,
 	)
+	start := time.Now()
 
 	rsp, err := a.client.BroadcastTx(a.accountName, msg)
 	if err != nil {
@@ -221,27 +222,35 @@ func (a *accountService) sendCoins(coins sdk.Coins, toAddrStr string) error {
 		return fmt.Errorf("failed to wait for tx: %w", err)
 	}
 
+	a.logger.Debug("coins sent", zap.String("to", toAddrStr), zap.Duration("duration", time.Since(start)))
+
 	return nil
 }
 
 func (a *accountService) WaitForTx(txHash string) error {
 	serviceClient := tx.NewServiceClient(a.client.Context())
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
+	ticker := time.NewTicker(time.Second)
+
+	defer func() {
+		cancel()
+		ticker.Stop()
+	}()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("timed out waiting for tx %s", txHash)
-		default:
+		case <-ticker.C:
 			resp, err := serviceClient.GetTx(ctx, &tx.GetTxRequest{Hash: txHash})
 			if err != nil {
-				return fmt.Errorf("failed to get tx: %w", err)
+				continue
 			}
 			if resp.TxResponse.Code == 0 {
 				return nil
+			} else {
+				return fmt.Errorf("tx failed with code %d: %s", resp.TxResponse.Code, resp.TxResponse.RawLog)
 			}
-			time.Sleep(time.Second)
 		}
 	}
 }

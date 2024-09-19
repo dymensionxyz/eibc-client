@@ -132,9 +132,17 @@ func (or *orderTracker) addFulfilledOrders(ctx context.Context, batch *orderBatc
 }
 
 func (or *orderTracker) canFulfillOrder(order *demandOrder) bool {
-	return !or.isOrderFulfilled(order.id) &&
-		!or.isOrderCurrent(order.id) &&
-		or.checkFeePercentage(order)
+	if or.isOrderFulfilled(order.id) {
+		return false
+	}
+	if or.isOrderCurrent(order.id) {
+		return false
+	}
+	if !or.checkFeePercentage(order) {
+		return false
+	}
+
+	return true
 }
 
 func (or *orderTracker) checkFeePercentage(order *demandOrder) bool {
