@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/crypto/keyring"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/cosmos/cosmos-sdk/types/tx"
 	"github.com/cosmos/cosmos-sdk/x/auth/types"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	"github.com/google/uuid"
@@ -209,9 +211,48 @@ func (a *accountService) sendCoins(coins sdk.Coins, toAddrStr string) error {
 		toAddr,
 		coins,
 	)
+	start := time.Now()
 
-	_, err = a.client.BroadcastTx(a.accountName, msg)
-	return err
+	rsp, err := a.client.BroadcastTx(a.accountName, msg)
+	if err != nil {
+		return fmt.Errorf("failed to broadcast tx: %w", err)
+	}
+
+	if err = a.WaitForTx(rsp.TxHash); err != nil {
+		return fmt.Errorf("failed to wait for tx: %w", err)
+	}
+
+	a.logger.Debug("coins sent", zap.String("to", toAddrStr), zap.Duration("duration", time.Since(start)))
+
+	return nil
+}
+
+func (a *accountService) WaitForTx(txHash string) error {
+	serviceClient := tx.NewServiceClient(a.client.Context())
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ticker := time.NewTicker(time.Second)
+
+	defer func() {
+		cancel()
+		ticker.Stop()
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timed out waiting for tx %s", txHash)
+		case <-ticker.C:
+			resp, err := serviceClient.GetTx(ctx, &tx.GetTxRequest{Hash: txHash})
+			if err != nil {
+				continue
+			}
+			if resp.TxResponse.Code == 0 {
+				return nil
+			} else {
+				return fmt.Errorf("tx failed with code %d: %s", resp.TxResponse.Code, resp.TxResponse.RawLog)
+			}
+		}
+	}
 }
 
 func (a *accountService) balanceOf(denom string) sdk.Int {
