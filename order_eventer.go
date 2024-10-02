@@ -112,7 +112,7 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 
 		order := &demandOrder{
 			id:        id,
-			denom:     fee.GetDenomByIndex(0),
+			denom:     price.GetDenomByIndex(0),
 			amount:    price,
 			fee:       fee,
 			status:    statuses[i],
