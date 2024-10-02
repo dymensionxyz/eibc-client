@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	tmtypes "github.com/tendermint/tendermint/rpc/core/types"
@@ -15,27 +17,21 @@ type orderEventer struct {
 	client cosmosclient.Client
 	logger *zap.Logger
 
-	batchSize       int
-	newOrders       chan []*demandOrder
-	canFulfillOrder func(*demandOrder) bool
-	subscriberID    string
+	orderTracker *orderTracker
+	subscriberID string
 }
 
 func newOrderEventer(
 	client cosmosclient.Client,
 	subscriberID string,
-	canFulfillOrder func(*demandOrder) bool,
-	batchSize int,
-	newOrders chan []*demandOrder,
+	orderTracker *orderTracker,
 	logger *zap.Logger,
 ) *orderEventer {
 	return &orderEventer{
-		client:          client,
-		subscriberID:    subscriberID,
-		batchSize:       batchSize,
-		logger:          logger.With(zap.String("module", "order-eventer")),
-		newOrders:       newOrders,
-		canFulfillOrder: canFulfillOrder,
+		client:       client,
+		subscriberID: subscriberID,
+		logger:       logger.With(zap.String("module", "order-eventer")),
+		orderTracker: orderTracker,
 	}
 }
 
@@ -53,6 +49,9 @@ func (e *orderEventer) start(ctx context.Context) error {
 
 func (e *orderEventer) enqueueEventOrders(res tmtypes.ResultEvent) error {
 	newOrders := e.parseOrdersFromEvents(res)
+	if len(newOrders) == 0 {
+		return nil
+	}
 
 	if e.logger.Level() <= zap.DebugLevel {
 		ids := make([]string, 0, len(newOrders))
@@ -64,7 +63,9 @@ func (e *orderEventer) enqueueEventOrders(res tmtypes.ResultEvent) error {
 		e.logger.Info("new demand orders", zap.Int("count", len(newOrders)))
 	}
 
-	batch := make([]*demandOrder, 0, e.batchSize)
+	e.orderTracker.addOrderToPool(newOrders...)
+
+	/*batch := make([]*demandOrder, 0, e.batchSize)
 
 	for _, order := range newOrders {
 		batch = append(batch, order)
@@ -77,7 +78,7 @@ func (e *orderEventer) enqueueEventOrders(res tmtypes.ResultEvent) error {
 
 	if len(batch) == 0 {
 		return nil
-	}
+	}*/
 
 	return nil
 }
@@ -95,6 +96,7 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 	fees := res.Events[createdEvent+".fee"]
 	statuses := res.Events[createdEvent+".packet_status"]
 	rollapps := res.Events[createdEvent+".rollapp_id"]
+	heights := res.Events[createdEvent+".block_height"]
 	newOrders := make([]*demandOrder, 0, len(ids))
 
 	for i, id := range ids {
@@ -110,17 +112,27 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 			continue
 		}
 
-		order := &demandOrder{
-			id:        id,
-			denom:     fee.GetDenomByIndex(0),
-			amount:    price,
-			fee:       fee,
-			status:    statuses[i],
-			rollappId: rollapps[i],
-			// blockHeight: height,
+		height, err := strconv.ParseInt(heights[i], 10, 64)
+		if err != nil {
+			e.logger.Error("failed to parse block height", zap.Error(err))
+			continue
 		}
 
-		if !e.canFulfillOrder(order) {
+		validationWaitTime := e.orderTracker.fulfillCriteria.FulfillmentMode.ValidationWaitTime
+		validDeadline := time.Now().Add(validationWaitTime)
+
+		order := &demandOrder{
+			id:            id,
+			denom:         fee.GetDenomByIndex(0),
+			amount:        price,
+			fee:           fee,
+			status:        statuses[i],
+			rollappId:     rollapps[i],
+			blockHeight:   height,
+			validDeadline: validDeadline,
+		}
+
+		if !e.orderTracker.canFulfillOrder(order) {
 			continue
 		}
 

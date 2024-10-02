@@ -14,13 +14,14 @@ type Order struct {
 	FulfilledHeight         uint64
 	ExpectedFinalizedHeight uint64
 	Status                  OrderStatus
+	ValidDeadline           int64
 }
 
 type OrderStatus string
 
 const (
-	OrderStatusPending   OrderStatus = "pending"
-	OrderStatusFinalized OrderStatus = "finalized"
+	OrderStatusFulfilling          OrderStatus = "fulfilling"
+	OrderStatusPendingFinalization OrderStatus = "pending"
 )
 
 type OrderOption func(*orderFilter)

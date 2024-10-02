@@ -23,31 +23,25 @@ type orderPoller struct {
 	indexerClient *http.Client
 	logger        *zap.Logger
 
-	batchSize       int
-	newOrders       chan []*demandOrder
-	canFulfillOrder func(*demandOrder) bool
+	orderTracker *orderTracker
 	sync.Mutex
 	pathMap map[string]string
 }
 
 func newOrderPoller(
 	client cosmosclient.Client,
-	canFulfillOrder func(*demandOrder) bool,
+	orderTracker *orderTracker,
 	pollingCfg OrderPollingConfig,
-	batchSize int,
-	newOrders chan []*demandOrder,
 	logger *zap.Logger,
 ) *orderPoller {
 	return &orderPoller{
-		client:          client,
-		indexerURL:      pollingCfg.IndexerURL,
-		interval:        pollingCfg.Interval,
-		batchSize:       batchSize,
-		logger:          logger.With(zap.String("module", "order-poller")),
-		newOrders:       newOrders,
-		canFulfillOrder: canFulfillOrder,
-		pathMap:         make(map[string]string),
-		indexerClient:   &http.Client{Timeout: 25 * time.Second},
+		client:        client,
+		indexerURL:    pollingCfg.IndexerURL,
+		interval:      pollingCfg.Interval,
+		logger:        logger.With(zap.String("module", "order-poller")),
+		orderTracker:  orderTracker,
+		pathMap:       make(map[string]string),
+		indexerClient: &http.Client{Timeout: 25 * time.Second},
 	}
 }
 
@@ -92,27 +86,36 @@ func (p *orderPoller) pollPendingDemandOrders() error {
 		return fmt.Errorf("failed to get demand orders: %w", err)
 	}
 
-	orders := p.convertOrders(demandOrders)
-	batch := make([]*demandOrder, 0, p.batchSize)
-	ids := make([]string, 0, len(orders))
+	newOrders := p.convertOrders(demandOrders)
 
-	for _, order := range orders {
-		batch = append(batch, order)
-		ids = append(ids, order.id)
-
-		if len(batch) >= p.batchSize || len(batch) == len(orders) {
-			p.newOrders <- batch
-			batch = make([]*demandOrder, 0, p.batchSize)
-			ids = make([]string, 0, len(orders))
-
-			if p.logger.Level() <= zap.DebugLevel {
-				p.logger.Debug("new orders batch", zap.Strings("count", ids))
-			} else {
-				p.logger.Info("new orders batch", zap.Int("count", len(ids)))
-			}
-		}
+	if len(newOrders) == 0 {
+		p.logger.Debug("no new orders")
+		return nil
 	}
 
+	p.orderTracker.addOrderToPool(newOrders...)
+
+	/*
+		batch := make([]*demandOrder, 0, p.batchSize)
+		ids := make([]string, 0, len(orders))
+
+		for _, order := range orders {
+			batch = append(batch, order)
+			ids = append(ids, order.id)
+
+			if len(batch) >= p.batchSize || len(batch) == len(orders) {
+				p.newOrders <- batch
+				batch = make([]*demandOrder, 0, p.batchSize)
+				ids = make([]string, 0, len(orders))
+
+				if p.logger.Level() <= zap.DebugLevel {
+					p.logger.Debug("new orders batch", zap.Strings("count", ids))
+				} else {
+					p.logger.Info("new orders batch", zap.Int("count", len(ids)))
+				}
+			}
+		}
+	*/
 	return nil
 }
 
@@ -138,25 +141,29 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 			continue
 		}
 
-		var blockHeight uint64
+		var blockHeight int64
 		if order.BlockHeight != "" {
-			blockHeight, err = strconv.ParseUint(order.BlockHeight, 10, 64)
+			blockHeight, err = strconv.ParseInt(order.BlockHeight, 10, 64)
 			if err != nil {
 				p.logger.Error("failed to parse block height", zap.Error(err))
 				continue
 			}
 		}
 
+		validationWaitTime := p.orderTracker.fulfillCriteria.FulfillmentMode.ValidationWaitTime
+		validDeadline := time.Now().Add(validationWaitTime)
+
 		newOrder := &demandOrder{
-			id:          order.EibcOrderId,
-			amount:      amount,
-			fee:         fee,
-			denom:       denom,
-			rollappId:   order.RollappId,
-			blockHeight: blockHeight,
+			id:            order.EibcOrderId,
+			amount:        amount,
+			fee:           fee,
+			denom:         denom,
+			rollappId:     order.RollappId,
+			blockHeight:   blockHeight,
+			validDeadline: validDeadline,
 		}
 
-		if !p.canFulfillOrder(newOrder) {
+		if !p.orderTracker.canFulfillOrder(newOrder) {
 			continue
 		}
 

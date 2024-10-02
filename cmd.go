@@ -74,6 +74,10 @@ var startCmd = &cobra.Command{
 			log.Fatalf("failed to unmarshal config: %v", err)
 		}
 
+		if !config.FulfillCriteria.FulfillmentMode.Level.validate() {
+			log.Fatalf("invalid fulfillment mode: %s", config.FulfillCriteria.FulfillmentMode)
+		}
+
 		log.Printf("using config file: %+v", viper.ConfigFileUsed())
 
 		oc, err := newOrderClient(cmd.Context(), config)

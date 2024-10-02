@@ -78,7 +78,7 @@ func (s *botStore) GetBot(ctx context.Context, key string, opts ...BotOption) (*
 	}
 
 	if filter.includePendingOrders {
-		bot.Orders, err = s.GetOrders(ctx, FilterByFulfiller(key), FilterByStatus(OrderStatusPending))
+		bot.Orders, err = s.GetOrders(ctx, FilterByFulfiller(key), FilterByStatus(OrderStatusPendingFinalization))
 		if err != nil {
 			return nil, fmt.Errorf("failed to get bot orders: %w", err)
 		}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"math/big"
+	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 )
@@ -12,14 +13,15 @@ type orderBatch struct {
 }
 
 type demandOrder struct {
-	id          string
-	denom       string
-	amount      sdk.Coins
-	fee         sdk.Coins
-	feeStr      string
-	rollappId   string
-	status      string
-	blockHeight uint64
+	id            string
+	denom         string
+	amount        sdk.Coins
+	fee           sdk.Coins
+	feeStr        string
+	rollappId     string
+	status        string
+	blockHeight   int64
+	validDeadline time.Time
 }
 
 func (o *demandOrder) feePercentage() float32 {

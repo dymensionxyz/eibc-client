@@ -53,7 +53,7 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		keyringBackend: config.Bots.KeyringBackend,
 	}
 
-	fetcherCosmosClient, err := cosmosclient.New(getCosmosClientOptions(fetcherClientCfg)...)
+	cosmosClient, err := cosmosclient.New(getCosmosClientOptions(fetcherClientCfg)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cosmos client: %w", err)
 	}
@@ -72,20 +72,20 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	bstore := store.NewBotStore(db)
 
 	ordTracker := newOrderTracker(
-		fetcherCosmosClient,
+		cosmosClient.RPC,
 		bstore,
 		fulfilledOrdersCh,
 		subscriberID,
+		config.Bots.MaxOrdersPerTx,
 		&config.FulfillCriteria,
+		orderCh,
 		logger,
 	)
 
 	eventer := newOrderEventer(
-		fetcherCosmosClient,
+		cosmosClient,
 		subscriberID,
-		ordTracker.canFulfillOrder,
-		config.Bots.MaxOrdersPerTx,
-		orderCh,
+		ordTracker,
 		logger,
 	)
 
@@ -167,11 +167,9 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 
 	if config.OrderPolling.Enabled {
 		oc.orderPoller = newOrderPoller(
-			fetcherCosmosClient,
-			ordTracker.canFulfillOrder,
+			cosmosClient,
+			ordTracker,
 			config.OrderPolling,
-			config.Bots.MaxOrdersPerTx,
-			orderCh,
 			logger,
 		)
 	}
