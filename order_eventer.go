@@ -63,22 +63,7 @@ func (e *orderEventer) enqueueEventOrders(res tmtypes.ResultEvent) error {
 		e.logger.Info("new demand orders", zap.Int("count", len(newOrders)))
 	}
 
-	e.orderTracker.addOrderToPool(newOrders...)
-
-	/*batch := make([]*demandOrder, 0, e.batchSize)
-
-	for _, order := range newOrders {
-		batch = append(batch, order)
-
-		if len(batch) >= e.batchSize || len(batch) == len(newOrders) {
-			e.newOrders <- batch
-			batch = make([]*demandOrder, 0, e.batchSize)
-		}
-	}
-
-	if len(batch) == 0 {
-		return nil
-	}*/
+	e.orderTracker.addOrder(newOrders...)
 
 	return nil
 }
@@ -103,6 +88,10 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 		price, err := sdk.ParseCoinsNormalized(prices[i])
 		if err != nil {
 			e.logger.Error("failed to parse price", zap.Error(err))
+			continue
+		}
+
+		if fees[i] == "" {
 			continue
 		}
 

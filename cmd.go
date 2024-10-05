@@ -75,7 +75,7 @@ var startCmd = &cobra.Command{
 		}
 
 		if !config.FulfillCriteria.FulfillmentMode.Level.validate() {
-			log.Fatalf("invalid fulfillment mode: %s", config.FulfillCriteria.FulfillmentMode)
+			log.Fatalf("invalid fulfillment mode: %s", config.FulfillCriteria.FulfillmentMode.Level)
 		}
 
 		log.Printf("using config file: %+v", viper.ConfigFileUsed())

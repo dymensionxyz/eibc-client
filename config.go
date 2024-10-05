@@ -61,6 +61,7 @@ type fulfillCriteria struct {
 type fulfillmentMode struct {
 	Level              fulfillmentLevel `mapstructure:"level"`
 	FullNodes          []string         `mapstructure:"full_nodes"`
+	MinConfirmations   int              `mapstructure:"min_confirmations"`
 	ValidationWaitTime time.Duration    `mapstructure:"validation_wait_time"`
 }
 

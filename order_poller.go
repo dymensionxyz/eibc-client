@@ -93,29 +93,8 @@ func (p *orderPoller) pollPendingDemandOrders() error {
 		return nil
 	}
 
-	p.orderTracker.addOrderToPool(newOrders...)
+	p.orderTracker.addOrder(newOrders...)
 
-	/*
-		batch := make([]*demandOrder, 0, p.batchSize)
-		ids := make([]string, 0, len(orders))
-
-		for _, order := range orders {
-			batch = append(batch, order)
-			ids = append(ids, order.id)
-
-			if len(batch) >= p.batchSize || len(batch) == len(orders) {
-				p.newOrders <- batch
-				batch = make([]*demandOrder, 0, p.batchSize)
-				ids = make([]string, 0, len(orders))
-
-				if p.logger.Level() <= zap.DebugLevel {
-					p.logger.Debug("new orders batch", zap.Strings("count", ids))
-				} else {
-					p.logger.Info("new orders batch", zap.Int("count", len(ids)))
-				}
-			}
-		}
-	*/
 	return nil
 }
 

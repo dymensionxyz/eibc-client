@@ -11,7 +11,10 @@ type Order struct {
 	ID                      string `bson:"_id,omitempty"`
 	Fulfiller               string
 	Amount                  string
+	Fee                     string
+	RollappID               string
 	FulfilledHeight         uint64
+	BlockHeight             int64
 	ExpectedFinalizedHeight uint64
 	Status                  OrderStatus
 	ValidDeadline           int64
@@ -105,6 +108,19 @@ func (s *botStore) SaveManyOrders(ctx context.Context, orders []*Order) error {
 	_, err := ordersCollection.InsertMany(ctx, records)
 	if err != nil {
 		return fmt.Errorf("failed to insert many orders: %w", err)
+	}
+
+	return nil
+}
+
+func (s *botStore) UpdateManyOrders(ctx context.Context, orders []*Order) error {
+	ordersCollection := s.Database(botDatabase).Collection(orderCollection)
+
+	for _, order := range orders {
+		_, err := ordersCollection.UpdateOne(ctx, bson.M{"_id": order.ID}, bson.M{"$set": order})
+		if err != nil {
+			return fmt.Errorf("failed to update order: %w", err)
+		}
 	}
 
 	return nil

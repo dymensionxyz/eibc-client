@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/stretchr/testify/assert"
@@ -150,15 +151,125 @@ var (
 
 func Test_worker_sequencerMode(t *testing.T) {
 	tests := []struct {
-		name      string
-		store     mockStore
-		batchSize int
-		orderIDs  []string
+		name             string
+		fullNodeClients  []*mockCosmosClient
+		store            mockStore
+		fulfillmentLevel fulfillmentLevel
+		minConfirmations int
+		batchSize        int
+		orderDeadline    time.Time
+		orderIDs         []string
+		expectedOrderIDs []string
 	}{
 		{
-			name:      "fulfill orders in sequencer mode",
-			batchSize: 7,
-			orderIDs:  generateOrderIDs(10),
+			name:             "fulfill orders in sequencer mode",
+			fulfillmentLevel: fulfillmentModeSequencer,
+			batchSize:        10,
+			orderIDs:         generateOrderIDs(10),
+			expectedOrderIDs: generateOrderIDs(10),
+		}, {
+			name:             "fulfill orders in sequencer mode: batshize smaller than order count",
+			fulfillmentLevel: fulfillmentModeSequencer,
+			batchSize:        7,
+			orderIDs:         generateOrderIDs(10),
+			expectedOrderIDs: generateOrderIDs(10),
+		}, {
+			name:             "fulfill orders in sequencer mode: batshize bigger than order count",
+			fulfillmentLevel: fulfillmentModeSequencer,
+			batchSize:        11,
+			orderIDs:         generateOrderIDs(10),
+			expectedOrderIDs: generateOrderIDs(10),
+		}, {
+			name:             "fulfill orders in sequencer mode: high order count",
+			fulfillmentLevel: fulfillmentModeSequencer,
+			batchSize:        7,
+			orderIDs:         generateOrderIDs(100),
+			expectedOrderIDs: generateOrderIDs(100),
+		}, {
+			name:             "fulfill orders in p2p mode",
+			fulfillmentLevel: fulfillmentModeP2P,
+			minConfirmations: 1,
+			fullNodeClients: []*mockCosmosClient{{
+				blocks: map[int64]*coretypes.ResultBlock{
+					1: {}, 2: {}, 3: {}, 4: {}, 5: {}, 6: {}, 7: {}, 8: {}, 9: {}, 10: {},
+				},
+			}},
+			batchSize:        10,
+			orderDeadline:    time.Now().Add(time.Second * 3),
+			orderIDs:         generateOrderIDs(10),
+			expectedOrderIDs: generateOrderIDs(10),
+		}, {
+			name:             "fulfill orders in p2p mode: no blocks 6 and 9",
+			fulfillmentLevel: fulfillmentModeP2P,
+			minConfirmations: 1,
+			fullNodeClients: []*mockCosmosClient{{
+				blocks: map[int64]*coretypes.ResultBlock{
+					1: {}, 2: {}, 3: {}, 4: {}, 5: {}, 7: {}, 8: {}, 10: {},
+				},
+			}},
+			batchSize:        10,
+			orderDeadline:    time.Now().Add(time.Second * 3),
+			orderIDs:         generateOrderIDs(10),
+			expectedOrderIDs: []string{"order1", "order2", "order3", "order4", "order5", "order7", "order8", "order10"},
+		}, {
+			name:             "fulfill orders in p2p mode: 2/3 nodes validated",
+			fulfillmentLevel: fulfillmentModeP2P,
+			minConfirmations: 2,
+			fullNodeClients: []*mockCosmosClient{
+				{
+					blocks: map[int64]*coretypes.ResultBlock{
+						1: {}, 2: {}, 3: nil, 4: {}, 5: {}, 6: {}, 7: nil, 8: {}, 9: {}, 10: {},
+					},
+				}, {
+					blocks: map[int64]*coretypes.ResultBlock{
+						1: {}, 2: nil, 3: {}, 4: nil, 5: {}, 6: nil, 7: {}, 8: nil, 9: {}, 10: nil,
+					},
+				}, {
+					blocks: map[int64]*coretypes.ResultBlock{
+						1: nil, 2: {}, 3: {}, 4: {}, 5: nil, 6: {}, 7: {}, 8: {}, 9: nil, 10: {},
+					},
+				},
+			},
+			batchSize:        10,
+			orderDeadline:    time.Now().Add(time.Second * 3),
+			orderIDs:         generateOrderIDs(10),
+			expectedOrderIDs: generateOrderIDs(10),
+		}, {
+			name:             "fulfill orders in p2p mode: half orders 2/3 validated, other half 1/3 validated",
+			fulfillmentLevel: fulfillmentModeP2P,
+			minConfirmations: 2,
+			fullNodeClients: []*mockCosmosClient{
+				{
+					blocks: map[int64]*coretypes.ResultBlock{
+						1: {}, 2: {}, 3: nil, 4: {}, 5: {}, 6: {}, 7: nil, 8: {}, 9: {}, 10: nil,
+					},
+				}, {
+					blocks: map[int64]*coretypes.ResultBlock{
+						1: {}, 2: nil, 3: {}, 4: nil, 5: {}, 6: nil, 7: nil, 8: nil, 9: nil, 10: nil,
+					},
+				}, {
+					blocks: map[int64]*coretypes.ResultBlock{
+						1: nil, 2: {}, 3: {}, 4: {}, 5: nil, 6: nil, 7: {}, 8: nil, 9: nil, 10: {},
+					},
+				},
+			},
+			batchSize:        10,
+			orderDeadline:    time.Now().Add(time.Second * 3),
+			orderIDs:         generateOrderIDs(10),
+			expectedOrderIDs: generateOrderIDs(5),
+		}, {
+			name:             "fulfill orders in p2p mode: orders hit deadline",
+			fulfillmentLevel: fulfillmentModeP2P,
+			minConfirmations: 1,
+			fullNodeClients: []*mockCosmosClient{
+				{
+					blocks: map[int64]*coretypes.ResultBlock{},
+				},
+			},
+			batchSize:        10,
+			orderDeadline:    time.Now().Add(-time.Second * 1),
+			orderIDs:         generateOrderIDs(10),
+			expectedOrderIDs: []string{},
 		},
 	}
 	for _, tt := range tests {
@@ -167,17 +278,20 @@ func Test_worker_sequencerMode(t *testing.T) {
 			fulfillOrderCh := make(chan []*demandOrder)
 
 			ot := &orderTracker{
-				client:          mockCosmosClient{},
+				hubClient:       &mockCosmosClient{},
+				fullNodeClients: transformFullNodeClients(tt.fullNodeClients),
 				store:           tt.store,
 				logger:          zap.NewNop(),
 				fulfilledOrders: make(map[string]struct{}),
-				ordersCh:        fulfillOrderCh,
+				validOrdersCh:   make(chan []*demandOrder),
+				outputOrdersCh:  fulfillOrderCh,
 				pool:            orderPool{orders: make(map[string]*demandOrder)},
 				batchSize:       tt.batchSize,
 				fulfillCriteria: &fulfillCriteria{
 					MinFeePercentage: sampleMinFeePercentage,
 					FulfillmentMode: fulfillmentMode{
-						Level: fulfillmentModeSequencer,
+						Level:            tt.fulfillmentLevel,
+						MinConfirmations: tt.minConfirmations,
 					},
 				},
 			}
@@ -187,31 +301,39 @@ func Test_worker_sequencerMode(t *testing.T) {
 
 			// generate orders and add them to the pool
 			go func() {
-				orders := generateOrders(tt.orderIDs)
-				ot.addOrderToPool(orders...)
+				orders := generateOrders(tt.orderIDs, tt.orderDeadline)
+				ot.addOrder(orders...)
 			}()
 
 			// get orders to fulfill
 			var ids []string
-			for toFulfillOrders := range fulfillOrderCh {
-				for _, o := range toFulfillOrders {
-					ids = append(ids, o.id)
-					if len(ids) == len(tt.orderIDs) {
-						close(fulfillOrderCh)
-						break
+		loop:
+			for {
+				select {
+				case <-time.NewTimer(time.Second * 5).C:
+					break loop
+				case toFulfillOrders := <-fulfillOrderCh:
+					for _, o := range toFulfillOrders {
+						ids = append(ids, o.id)
+						if len(ids) == len(tt.expectedOrderIDs) {
+							close(fulfillOrderCh)
+							break loop
+						}
 					}
 				}
 			}
 
-			assert.ElementsMatch(t, tt.orderIDs, ids)
+			assert.ElementsMatch(t, tt.expectedOrderIDs, ids)
 		})
 	}
 }
 
-func generateOrders(ids []string) (orders []*demandOrder) {
-	for _, id := range ids {
+func generateOrders(ids []string, deadline time.Time) (orders []*demandOrder) {
+	for i, id := range ids {
 		order := *sampleDemandOrder
 		order.id = id
+		order.validDeadline = deadline
+		order.blockHeight = int64(i + 1)
 		orders = append(orders, &order)
 	}
 	return
@@ -225,15 +347,35 @@ func generateOrderIDs(n int) (ids []string) {
 
 type mockCosmosClient struct {
 	rpcclient.Client
-	block *coretypes.ResultBlock
+	successfulAttempt int
+	attemptCounter    int
+	blocks            map[int64]*coretypes.ResultBlock
 }
 
-func (m mockCosmosClient) Subscribe(context.Context, string, string, ...int) (out <-chan coretypes.ResultEvent, err error) {
+func (m *mockCosmosClient) Subscribe(context.Context, string, string, ...int) (out <-chan coretypes.ResultEvent, err error) {
 	return make(chan coretypes.ResultEvent), nil
 }
 
-func (m mockCosmosClient) Block(context.Context, *int64) (*coretypes.ResultBlock, error) {
-	return m.block, nil
+func (m *mockCosmosClient) Block(_ context.Context, h *int64) (*coretypes.ResultBlock, error) {
+	if len(m.blocks) == 0 {
+		return nil, fmt.Errorf("no block")
+	}
+	m.attemptCounter++
+	if m.attemptCounter < m.successfulAttempt {
+		return nil, fmt.Errorf("failed to get block")
+	}
+	if h == nil {
+		return nil, fmt.Errorf("block height is nil")
+	}
+	return m.blocks[*h], nil
+}
+
+func transformFullNodeClients(clients []*mockCosmosClient) []rpcclient.Client {
+	var c []rpcclient.Client
+	for _, client := range clients {
+		c = append(c, client)
+	}
+	return c
 }
 
 type mockStore struct {

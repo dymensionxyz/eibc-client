@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	rpcclient "github.com/tendermint/tendermint/rpc/client"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
@@ -28,6 +29,10 @@ type orderClient struct {
 }
 
 func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
+	if config.FulfillCriteria.FulfillmentMode.MinConfirmations > len(config.FulfillCriteria.FulfillmentMode.FullNodes) {
+		return nil, fmt.Errorf("min confirmations cannot be greater than the number of full nodes")
+	}
+
 	sdkcfg := sdk.GetConfig()
 	sdkcfg.SetBech32PrefixForAccount(hubAddressPrefix, pubKeyPrefix)
 
@@ -44,20 +49,6 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		return nil, fmt.Errorf("failed to parse minimum gas balance: %w", err)
 	}
 
-	// init cosmos client for order fetcher
-	fetcherClientCfg := clientConfig{
-		homeDir:        config.Bots.KeyringDir,
-		nodeAddress:    config.NodeAddress,
-		gasFees:        config.Gas.Fees,
-		gasPrices:      config.Gas.Prices,
-		keyringBackend: config.Bots.KeyringBackend,
-	}
-
-	cosmosClient, err := cosmosclient.New(getCosmosClientOptions(fetcherClientCfg)...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create cosmos client: %w", err)
-	}
-
 	//nolint:gosec
 	subscriberID := fmt.Sprintf("eibc-client-%d", rand.Int())
 
@@ -71,8 +62,19 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	fulfilledOrdersCh := make(chan *orderBatch, newOrderBufferSize) // TODO: make buffer size configurable
 	bstore := store.NewBotStore(db)
 
+	hubClient, err := getHubClient(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create hub client: %w", err)
+	}
+
+	fullNodeClients, err := getFullNodeClients(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create full node clients: %w", err)
+	}
+
 	ordTracker := newOrderTracker(
-		cosmosClient.RPC,
+		hubClient.RPC,
+		fullNodeClients,
 		bstore,
 		fulfilledOrdersCh,
 		subscriberID,
@@ -83,7 +85,7 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	)
 
 	eventer := newOrderEventer(
-		cosmosClient,
+		hubClient,
 		subscriberID,
 		ordTracker,
 		logger,
@@ -167,7 +169,7 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 
 	if config.OrderPolling.Enabled {
 		oc.orderPoller = newOrderPoller(
-			cosmosClient,
+			hubClient,
 			ordTracker,
 			config.OrderPolling,
 			logger,
@@ -175,6 +177,42 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	}
 
 	return oc, nil
+}
+
+func getHubClient(config Config) (cosmosclient.Client, error) {
+	// init cosmos client for order fetcher
+	hubClientCfg := clientConfig{
+		homeDir:        config.Bots.KeyringDir,
+		nodeAddress:    config.NodeAddress,
+		gasFees:        config.Gas.Fees,
+		gasPrices:      config.Gas.Prices,
+		keyringBackend: config.Bots.KeyringBackend,
+	}
+
+	hubClient, err := cosmosclient.New(getCosmosClientOptions(hubClientCfg)...)
+	if err != nil {
+		return cosmosclient.Client{}, fmt.Errorf("failed to create cosmos client: %w", err)
+	}
+
+	return hubClient, nil
+}
+
+func getFullNodeClients(config Config) (clients []rpcclient.Client, err error) {
+	for _, nodeAddress := range config.FulfillCriteria.FulfillmentMode.FullNodes {
+		// init cosmos client for order fetcher
+		clientCfg := clientConfig{
+			nodeAddress: nodeAddress,
+		}
+
+		client, err := cosmosclient.New(getCosmosClientOptions(clientCfg)...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create cosmos client: %w", err)
+		}
+
+		clients = append(clients, client.RPC)
+	}
+
+	return
 }
 
 func (oc *orderClient) start(ctx context.Context) error {

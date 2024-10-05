@@ -17,13 +17,15 @@ import (
 )
 
 type orderTracker struct {
-	client rpcclient.Client
-	store  botStore
-	logger *zap.Logger
+	hubClient       rpcclient.Client
+	fullNodeClients []rpcclient.Client
+	store           botStore
+	logger          *zap.Logger
 
 	fomu            sync.Mutex
 	fulfilledOrders map[string]struct{}
-	ordersCh        chan<- []*demandOrder
+	validOrdersCh   chan []*demandOrder
+	outputOrdersCh  chan<- []*demandOrder
 
 	pool orderPool
 
@@ -39,6 +41,7 @@ type botStore interface {
 	GetOrders(ctx context.Context, opts ...store.OrderOption) ([]*store.Order, error)
 	GetOrder(ctx context.Context, id string) (*store.Order, error)
 	SaveManyOrders(ctx context.Context, orders []*store.Order) error
+	UpdateManyOrders(ctx context.Context, orders []*store.Order) error
 	DeleteOrder(ctx context.Context, id string) error
 	GetBot(ctx context.Context, key string, opts ...store.BotOption) (*store.Bot, error)
 	GetBots(ctx context.Context, opts ...store.BotOption) ([]*store.Bot, error)
@@ -47,7 +50,8 @@ type botStore interface {
 }
 
 func newOrderTracker(
-	client rpcclient.Client,
+	hubClient rpcclient.Client,
+	fullNodeClients []rpcclient.Client,
 	store botStore,
 	fulfilledOrdersCh chan *orderBatch,
 	subscriberID string,
@@ -57,13 +61,15 @@ func newOrderTracker(
 	logger *zap.Logger,
 ) *orderTracker {
 	return &orderTracker{
-		client:            client,
+		hubClient:         hubClient,
+		fullNodeClients:   fullNodeClients,
 		store:             store,
 		pool:              orderPool{orders: make(map[string]*demandOrder)},
 		fulfilledOrdersCh: fulfilledOrdersCh,
 		batchSize:         batchSize,
 		fulfillCriteria:   fCriteria,
-		ordersCh:          ordersCh,
+		validOrdersCh:     make(chan []*demandOrder),
+		outputOrdersCh:    ordersCh,
 		logger:            logger.With(zap.String("module", "order-resolver")),
 		subscriberID:      subscriberID,
 		fulfilledOrders:   make(map[string]struct{}),
@@ -82,146 +88,186 @@ func (or *orderTracker) start(ctx context.Context) error {
 
 	or.selectOrdersWorker(ctx)
 
+	go or.syncStore(ctx)
 	go or.fulfilledOrdersWorker(ctx)
 
 	return nil
 }
 
-const (
-	numWorkers = 5
-	batchTime  = 2 * time.Second
-)
-
+// Demand orders are first added:
+// - in sequencer mode, the first batch is sent to the output channel, and the rest of the orders are added to the pool
+// - in p2p and settlement mode, all orders are added to the pool
+// Then, the orders are periodically popped (fetched and deleted) from the pool and checked for validity.
+// If the order is valid, it is sent to the output channel.
+// If the order is not valid, it is added back to the pool.
+// After the order validity deadline is expired, the order is removed permanently.
+// Once an order is fulfilled, it is removed from the store
 func (or *orderTracker) selectOrdersWorker(ctx context.Context) {
-	validOrdersCh := make(chan *demandOrder, or.batchSize)
-	toCheckOrdersCh := make(chan *demandOrder, or.batchSize)
-
-	for i := 0; i < numWorkers; i++ {
-		go or.enqueueValidOrder(ctx, toCheckOrdersCh, validOrdersCh)
-	}
-
-	go or.pullOrders(toCheckOrdersCh)
-	go or.pushValidOrders(validOrdersCh)
+	toCheckOrdersCh := make(chan []*demandOrder, or.batchSize)
+	go or.pullOrders(ctx, toCheckOrdersCh)
+	go or.enqueueValidOrders(ctx, toCheckOrdersCh)
 }
 
-func (or *orderTracker) pullOrders(toCheckOrdersCh chan *demandOrder) {
-	var ticker *time.Ticker
-	if or.fulfillCriteria.FulfillmentMode.Level == fulfillmentModeSequencer {
-		ticker = time.NewTicker(1 * time.Second)
-	} else {
-		ticker = time.NewTicker(5 * time.Second)
-	}
-	for {
-		select {
-		case <-ticker.C:
-			// TODO: orders will be removed from the pool, what happens if fulfillment fails/succeeds?
-			// pop a batch of orders from the pool
-			// and send them to the order channel
-			// channel will block until orders are processed
-			// after unblocking, more orders will be popped from the pool
-			for _, order := range or.pool.popOrders(or.batchSize) {
-				toCheckOrdersCh <- order
-			}
-		}
-	}
-}
-
-func (or *orderTracker) pushValidOrders(validOrdersCh <-chan *demandOrder) {
-	batch := make([]*demandOrder, 0, or.batchSize)
-	timer := time.NewTimer(batchTime)
-
-	for {
-		select {
-		case order := <-validOrdersCh:
-			batch = append(batch, order)
-			if len(batch) >= or.batchSize {
-				or.ordersCh <- batch
-				batch = nil
-			}
-			timer.Reset(batchTime)
-		case <-timer.C:
-			if len(batch) > 0 {
-				or.ordersCh <- batch
-				batch = nil
-			}
-		}
-	}
-}
-
-func (or *orderTracker) enqueueValidOrder(ctx context.Context, toCheckOrdersCh <-chan *demandOrder, validOrderCh chan<- *demandOrder) {
+func (or *orderTracker) pullOrders(ctx context.Context, toCheckOrdersCh chan []*demandOrder) {
+	ticker := time.NewTicker(500 * time.Millisecond)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case order := <-toCheckOrdersCh:
-			valid, err := or.isOrderValid(ctx, order)
-			if err != nil {
-				or.logger.Error("failed to check validation of block", zap.Error(err))
-				return
+		case <-ticker.C:
+			orders := or.pool.popOrders(or.batchSize)
+			if len(orders) == 0 {
+				continue
 			}
-
-			if !valid {
-				or.logger.Debug("order is not valid yet", zap.String("id", order.id))
-				// order is not valid yet, so add it back to the pool
-				or.addOrderToPool(order)
-				return
+			// in "sequencer" mode send the orders directly to be fulfilled,
+			// in other modes, send the orders to be checked for validity
+			if or.fulfillCriteria.FulfillmentMode.Level == fulfillmentModeSequencer {
+				or.outputOrdersCh <- orders
+			} else {
+				toCheckOrdersCh <- orders
 			}
-			validOrderCh <- order
 		}
 	}
 }
 
-func (or *orderTracker) isOrderValid(ctx context.Context, order *demandOrder) (valid bool, _ error) {
-	// for SequencerFulfillment mode, we don't need to check if the block was validated
-	if or.fulfillCriteria.FulfillmentMode.Level == fulfillmentModeSequencer {
-		return true, nil
+func (or *orderTracker) enqueueValidOrders(ctx context.Context, toCheckOrdersCh <-chan []*demandOrder) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case orders := <-toCheckOrdersCh:
+			validOrders, retryOrders := or.getValidAndRetryOrders(ctx, orders)
+			if len(validOrders) > 0 {
+				or.outputOrdersCh <- validOrders
+			}
+			if len(retryOrders) > 0 {
+				or.pool.addOrder(retryOrders...)
+			}
+		}
 	}
+}
 
-	defer func() {
-		if !valid && order.validDeadline.After(time.Now()) {
-			or.logger.Debug("order deadline has passed", zap.String("id", order.id))
-			// order is likely fraudulent, delete it
+func (or *orderTracker) getValidAndRetryOrders(ctx context.Context, orders []*demandOrder) (validOrders, invalidOrders []*demandOrder) {
+	for _, order := range orders {
+		valid, err := or.isOrderValid(ctx, order)
+		if err != nil {
+			or.logger.Error("failed to check validation of block", zap.Error(err))
+			continue
+		}
+		if valid {
+			validOrders = append(validOrders, order)
+			continue
+		}
+		if or.isOrderExpired(order) {
+			or.logger.Debug("order has expired", zap.String("id", order.id))
+			// order has expired, so delete it from the store (it's already deleted from the pool at this point)
 			if err := or.store.DeleteOrder(ctx, order.id); err != nil {
 				or.logger.Error("failed to delete order", zap.Error(err))
 			}
-			return
+			continue
 		}
-	}()
-
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	_ /*block*/, err := or.client.Block(ctx, &order.blockHeight)
-	if err != nil {
-		// TODO: check for proper error
-		if !errors.Is(err, context.DeadlineExceeded) {
-			return
-		}
-		return false, fmt.Errorf("failed to get block: %w", err)
+		or.logger.Debug("order is not valid yet", zap.String("id", order.id))
+		// order is not valid yet, so add it back to the pool
+		invalidOrders = append(invalidOrders, order)
 	}
-
-	withSettlement := or.fulfillCriteria.FulfillmentMode.Level == fulfillmentModeSettlement
-	settlementValidated := true // block.Block.SettlementValidated // TODO: implement
-
-	if withSettlement {
-		valid = settlementValidated
-	}
-
-	valid = true
 	return
 }
 
-// TODO: cache every new order, but for P2P and Settlement, also save to DB
-// when fulfilled, remove from fulfilledOrders and DB
+func (or *orderTracker) isOrderValid(ctx context.Context, order *demandOrder) (valid bool, _ error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
-func (or *orderTracker) syncStore() {
-	// TODO
+	var numValidated int
+	for _, node := range or.fullNodeClients {
+		block, err := node.Block(ctx, &order.blockHeight)
+		if err != nil || block == nil {
+			// TODO: check for proper error
+			if errors.Is(err, context.DeadlineExceeded) {
+				return
+			}
+			or.logger.Error("failed to get block", zap.Error(err))
+			continue
+		}
+
+		withSettlement := or.fulfillCriteria.FulfillmentMode.Level == fulfillmentModeSettlement
+		settlementValidated := true // block.Block.SettlementValidated // TODO: implement
+
+		if withSettlement {
+			if !settlementValidated {
+				continue
+			}
+		}
+		numValidated++
+	}
+
+	valid = numValidated >= or.fulfillCriteria.FulfillmentMode.MinConfirmations
+	return
 }
 
-func (or *orderTracker) addOrderToPool(order ...*demandOrder) {
-	or.pool.addOrder(order...)
+func (or *orderTracker) isOrderExpired(order *demandOrder) bool {
+	return time.Now().After(order.validDeadline)
 }
 
+func (or *orderTracker) addOrder(orders ...*demandOrder) {
+	// - in mode "sequencer" we send a batch directly to be fulfilled,
+	// and any orders that overflow the batch are added to the pool
+	// - in mode "p2p" and "settlement" all orders are added to the pool
+	if or.fulfillCriteria.FulfillmentMode.Level == fulfillmentModeSequencer {
+		var (
+			batchToSend []*demandOrder
+			batchToPool []*demandOrder
+		)
+		// send one batch to fulfilling, add the rest to the pool
+		for _, o := range orders {
+			if len(batchToSend) < or.batchSize {
+				batchToSend = append(batchToSend, o)
+				continue
+			}
+			batchToPool = append(batchToPool, o)
+		}
+		or.outputOrdersCh <- batchToSend
+		orders = batchToPool
+	}
+	or.pool.addOrder(orders...)
+}
+
+// sync the store with the pool every 30 seconds
+func (or *orderTracker) syncStore(ctx context.Context) {
+	for range time.NewTicker(time.Second * 30).C {
+		poolOrders := or.pool.getOrders()
+		storeOrders, err := or.store.GetOrders(ctx)
+		if err != nil {
+			or.logger.Error("failed to get orders", zap.Error(err))
+			continue
+		}
+		storeGotOrders := make(map[string]struct{}, len(storeOrders))
+		for _, o := range storeOrders {
+			storeGotOrders[o.ID] = struct{}{}
+		}
+
+		toSaveOrders := make([]*store.Order, len(poolOrders))
+
+		for i, o := range poolOrders {
+			if _, ok := storeGotOrders[o.id]; ok {
+				continue
+			}
+			toSaveOrders[i] = &store.Order{
+				ID:            o.id,
+				Amount:        o.amount.String(),
+				Fee:           o.feeStr,
+				RollappID:     o.rollappId,
+				BlockHeight:   o.blockHeight,
+				Status:        store.OrderStatusFulfilling, // always fulfilling status in the pool
+				ValidDeadline: o.validDeadline.Unix(),
+			}
+		}
+		if err := or.store.SaveManyOrders(ctx, toSaveOrders); err != nil {
+			or.logger.Error("failed to save orders", zap.Error(err))
+		}
+	}
+}
+
+// upon startup, load the orders from the store: pending orders and fulfilled orders
 func (or *orderTracker) loadTrackedOrders(ctx context.Context) error {
 	// load fulfilled orders from the database
 	fulfilledOrders, err := or.store.GetOrders(ctx, store.FilterByStatus(store.OrderStatusPendingFinalization))
@@ -251,11 +297,11 @@ func (or *orderTracker) loadTrackedOrders(ctx context.Context) error {
 	for _, order := range pendingOrders {
 		orders = append(orders, &demandOrder{
 			id:            order.ID,
-			feeStr:        "",
-			rollappId:     "",
-			status:        "",
-			blockHeight:   0,
-			validDeadline: time.Time{},
+			feeStr:        order.Fee,
+			rollappId:     order.RollappID,
+			status:        string(order.Status),
+			blockHeight:   order.BlockHeight,
+			validDeadline: time.Unix(order.ValidDeadline, 0),
 		})
 		countPending++
 	}
@@ -291,19 +337,22 @@ func (or *orderTracker) addFulfilledOrders(ctx context.Context, batch *orderBatc
 		}
 		// add to cache
 		or.fulfilledOrders[order.id] = struct{}{}
-		or.pool.removeOrder(order.id)
+		or.pool.removeOrder(order.id) // just in case it's still in the pool
 
 		storeOrders[i] = &store.Order{
 			ID:            order.id,
 			Fulfiller:     batch.fulfiller,
 			Amount:        order.amount[0].String(),
+			Fee:           order.feeStr,
+			RollappID:     order.rollappId,
+			BlockHeight:   order.blockHeight,
 			Status:        store.OrderStatusPendingFinalization,
 			ValidDeadline: order.validDeadline.Unix(),
 		}
 	}
 	or.fomu.Unlock()
 
-	if err := or.store.SaveManyOrders(ctx, storeOrders); err != nil {
+	if err := or.store.UpdateManyOrders(ctx, storeOrders); err != nil {
 		return fmt.Errorf("failed to save orders: %w", err)
 	}
 
@@ -360,7 +409,7 @@ func (or *orderTracker) waitForFinalizedOrder(ctx context.Context) error {
 	// TODO: should filter by fulfiller (one of the bots)?
 	query := fmt.Sprintf("%s.is_fulfilled='true' AND %s.new_packet_status='FINALIZED'", finalizedEvent, finalizedEvent)
 
-	resCh, err := or.client.Subscribe(ctx, or.subscriberID, query)
+	resCh, err := or.hubClient.Subscribe(ctx, or.subscriberID, query)
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to demand orders: %w", err)
 	}
