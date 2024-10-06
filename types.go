@@ -1,10 +1,13 @@
 package main
 
 import (
+	"fmt"
 	"math/big"
 	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	"github.com/dymensionxyz/eibc-client/store"
 )
 
 type orderBatch struct {
@@ -45,6 +48,27 @@ func (o *demandOrder) feePercentage() float32 {
 	feeProportion, _ := new(big.Float).Quo(fee, price).Float32()
 	feePercent := feeProportion * 100
 	return feePercent
+}
+
+func fromStoreOrder(order *store.Order) (*demandOrder, error) {
+	fee, err := sdk.ParseCoinsNormalized(order.Fee)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse fee: %w", err)
+	}
+	amount, err := sdk.ParseCoinsNormalized(order.Amount)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse amount: %w", err)
+	}
+	return &demandOrder{
+		id:            order.ID,
+		denom:         fee.GetDenomByIndex(0),
+		amount:        amount,
+		fee:           fee,
+		rollappId:     order.RollappID,
+		status:        string(order.Status),
+		blockHeight:   order.BlockHeight,
+		validDeadline: time.Unix(order.ValidDeadline, 0),
+	}, nil
 }
 
 type account struct {

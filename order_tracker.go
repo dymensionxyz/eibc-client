@@ -24,19 +24,23 @@ type orderTracker struct {
 	bots            map[string]*orderFulfiller
 
 	fomu            sync.Mutex
-	fulfilledOrders map[string]struct{}
+	fulfilledOrders map[string]*demandOrder
 	validOrdersCh   chan []*demandOrder
 	outputOrdersCh  chan<- []*demandOrder
 
 	pool orderPool
 
-	batchSize         int
-	fulfillCriteria   *fulfillCriteria
-	fulfilledOrdersCh chan *orderBatch
-	subscriberID      string
+	batchSize                int
+	disputePeriodInBlocks    int64
+	finalizedCheckerInterval time.Duration
+	fulfillCriteria          *fulfillCriteria
+	fulfilledOrdersCh        chan *orderBatch
+	subscriberID             string
 }
 
-// TODO: implement a store syncer to sync the store with the state of the order tracker
+const (
+	defaultFinalizedCheckerInterval = 20 * time.Second
+)
 
 type botStore interface {
 	GetOrders(ctx context.Context, opts ...store.OrderOption) ([]*store.Order, error)
@@ -58,24 +62,27 @@ func newOrderTracker(
 	bots map[string]*orderFulfiller,
 	subscriberID string,
 	batchSize int,
+	disputePeriodInBlocks int64,
 	fCriteria *fulfillCriteria,
 	ordersCh chan<- []*demandOrder,
 	logger *zap.Logger,
 ) *orderTracker {
 	return &orderTracker{
-		hubClient:         hubClient,
-		fullNodeClients:   fullNodeClients,
-		store:             store,
-		pool:              orderPool{orders: make(map[string]*demandOrder)},
-		fulfilledOrdersCh: fulfilledOrdersCh,
-		bots:              bots,
-		batchSize:         batchSize,
-		fulfillCriteria:   fCriteria,
-		validOrdersCh:     make(chan []*demandOrder),
-		outputOrdersCh:    ordersCh,
-		logger:            logger.With(zap.String("module", "order-resolver")),
-		subscriberID:      subscriberID,
-		fulfilledOrders:   make(map[string]struct{}),
+		hubClient:                hubClient,
+		fullNodeClients:          fullNodeClients,
+		store:                    store,
+		pool:                     orderPool{orders: make(map[string]*demandOrder)},
+		fulfilledOrdersCh:        fulfilledOrdersCh,
+		bots:                     bots,
+		batchSize:                batchSize,
+		disputePeriodInBlocks:    disputePeriodInBlocks,
+		finalizedCheckerInterval: defaultFinalizedCheckerInterval,
+		fulfillCriteria:          fCriteria,
+		validOrdersCh:            make(chan []*demandOrder),
+		outputOrdersCh:           ordersCh,
+		logger:                   logger.With(zap.String("module", "order-resolver")),
+		subscriberID:             subscriberID,
+		fulfilledOrders:          make(map[string]*demandOrder),
 	}
 }
 
@@ -93,6 +100,7 @@ func (or *orderTracker) start(ctx context.Context) error {
 
 	// go or.syncStore(ctx) TODO: do we really need all the orders in the store before fulfilling?
 	go or.fulfilledOrdersWorker(ctx)
+	go or.finalizedChecker(ctx)
 
 	return nil
 }
@@ -285,7 +293,11 @@ func (or *orderTracker) loadTrackedOrders(ctx context.Context) error {
 
 	or.fomu.Lock()
 	for _, order := range fulfilledOrders {
-		or.fulfilledOrders[order.ID] = struct{}{}
+		ord, err := fromStoreOrder(order)
+		if err != nil {
+			return fmt.Errorf("failed to convert order: %w", err)
+		}
+		or.fulfilledOrders[order.ID] = ord
 		countFulfilled++
 	}
 	or.fomu.Unlock()
@@ -298,14 +310,11 @@ func (or *orderTracker) loadTrackedOrders(ctx context.Context) error {
 
 	var orders []*demandOrder
 	for _, order := range pendingOrders {
-		orders = append(orders, &demandOrder{
-			id:            order.ID,
-			feeStr:        order.Fee,
-			rollappId:     order.RollappID,
-			status:        string(order.Status),
-			blockHeight:   order.BlockHeight,
-			validDeadline: time.Unix(order.ValidDeadline, 0),
-		})
+		ord, err := fromStoreOrder(order)
+		if err != nil {
+			return fmt.Errorf("failed to convert order: %w", err)
+		}
+		orders = append(orders, ord)
 		countPending++
 	}
 
@@ -339,7 +348,7 @@ func (or *orderTracker) addFulfilledOrders(ctx context.Context, batch *orderBatc
 			continue
 		}
 		// add to cache
-		or.fulfilledOrders[order.id] = struct{}{}
+		or.fulfilledOrders[order.id] = order
 		or.pool.removeOrder(order.id) // just in case it's still in the pool
 
 		storeOrders[i] = &store.Order{
@@ -450,11 +459,54 @@ func (or *orderTracker) finalizeOrders(ctx context.Context, res tmtypes.ResultEv
 	return nil
 }
 
+func (or *orderTracker) finalizedChecker(ctx context.Context) {
+	if or.disputePeriodInBlocks == 0 {
+		return
+	}
+	ticker := time.NewTicker(or.finalizedCheckerInterval)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := or.checkIfFinalized(ctx); err != nil {
+				or.logger.Error("failed to check if order is finalized", zap.Error(err))
+			}
+		}
+	}
+}
+
+func (or *orderTracker) checkIfFinalized(ctx context.Context) error {
+	disputePeriodInBlocks := or.disputePeriodInBlocks
+	lastBlock, err := or.hubClient.Block(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to get current height: %w", err)
+	}
+
+	currentHeight := lastBlock.Block.Height
+
+	or.fomu.Lock()
+	var orderIDsToFinalize []string
+	for id, order := range or.fulfilledOrders {
+		if currentHeight-order.blockHeight >= disputePeriodInBlocks {
+			orderIDsToFinalize = append(orderIDsToFinalize, id)
+		}
+	}
+	or.fomu.Unlock()
+
+	for _, id := range orderIDsToFinalize {
+		if err := or.finalizeOrderWithID(ctx, id); err != nil {
+			or.logger.Error("failed to finalize order", zap.Error(err))
+		}
+	}
+
+	return nil
+}
+
 func (or *orderTracker) finalizeOrderWithID(ctx context.Context, id string) error {
 	or.fomu.Lock()
-	defer or.fomu.Unlock()
-
 	_, ok := or.fulfilledOrders[id]
+	or.fomu.Unlock()
 	if !ok {
 		return nil
 	}
@@ -500,7 +552,9 @@ func (or *orderTracker) finalizeOrderWithID(ctx context.Context, id string) erro
 		return fmt.Errorf("failed to delete order: %w", err)
 	}
 
+	or.fomu.Lock()
 	delete(or.fulfilledOrders, id)
+	or.fomu.Unlock()
 
 	or.logger.Info("finalized order", zap.String("id", id))
 

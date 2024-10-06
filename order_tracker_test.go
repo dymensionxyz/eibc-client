@@ -15,7 +15,7 @@ import (
 func Test_orderTracker_canFulfillOrder(t *testing.T) {
 	type fields struct {
 		currentOrders   map[string]*demandOrder
-		trackedOrders   map[string]struct{}
+		trackedOrders   map[string]*demandOrder
 		fulfillCriteria *fulfillCriteria
 	}
 	type args struct {
@@ -41,8 +41,8 @@ func Test_orderTracker_canFulfillOrder(t *testing.T) {
 		}, {
 			name: "cannot fulfill order: order already fulfilled",
 			fields: fields{
-				trackedOrders: map[string]struct{}{
-					sampleDemandOrder.id: {},
+				trackedOrders: map[string]*demandOrder{
+					sampleDemandOrder.id: sampleDemandOrder,
 				},
 				fulfillCriteria: &fulfillCriteria{
 					MinFeePercentage: sampleMinFeePercentage,
@@ -115,7 +115,7 @@ func Test_orderTracker_canFulfillOrder(t *testing.T) {
 				or.pool.orders = make(map[string]*demandOrder)
 			}
 			if or.fulfilledOrders == nil {
-				or.fulfilledOrders = make(map[string]struct{})
+				or.fulfilledOrders = make(map[string]*demandOrder)
 			}
 			if got := or.canFulfillOrder(tt.args.order); got != tt.want {
 				t.Errorf("canFulfillOrder() = %v, want %v", got, tt.want)
@@ -279,7 +279,7 @@ func Test_worker_sequencerMode(t *testing.T) {
 				fullNodeClients: transformFullNodeClients(tt.fullNodeClients),
 				store:           tt.store,
 				logger:          zap.NewNop(),
-				fulfilledOrders: make(map[string]struct{}),
+				fulfilledOrders: make(map[string]*demandOrder),
 				validOrdersCh:   make(chan []*demandOrder),
 				outputOrdersCh:  fulfillOrderCh,
 				pool:            orderPool{orders: make(map[string]*demandOrder)},

@@ -85,6 +85,7 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		bots,
 		subscriberID,
 		config.Bots.MaxOrdersPerTx,
+		config.DisputePeriodInBlocks,
 		&config.FulfillCriteria,
 		orderCh,
 		logger,

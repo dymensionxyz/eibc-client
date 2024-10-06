@@ -11,11 +11,12 @@ import (
 )
 
 type Config struct {
-	HomeDir      string             `mapstructure:"home_dir"`
-	NodeAddress  string             `mapstructure:"node_address"`
-	DBPath       string             `mapstructure:"db_path"`
-	Gas          GasConfig          `mapstructure:"gas"`
-	OrderPolling OrderPollingConfig `mapstructure:"order_polling"`
+	HomeDir               string             `mapstructure:"home_dir"`
+	NodeAddress           string             `mapstructure:"node_address"`
+	DBPath                string             `mapstructure:"db_path"`
+	DisputePeriodInBlocks int64              `mapstructure:"dispute_period_in_blocks"`
+	Gas                   GasConfig          `mapstructure:"gas"`
+	OrderPolling          OrderPollingConfig `mapstructure:"order_polling"`
 
 	Whale           whaleConfig     `mapstructure:"whale"`
 	Bots            botConfig       `mapstructure:"bots"`
