@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/cosmos/cosmos-sdk/client"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 	"go.uber.org/zap"
@@ -13,34 +14,54 @@ import (
 )
 
 type orderFulfiller struct {
-	accountSvc *accountService
-	client     cosmosclient.Client
-	logger     *zap.Logger
+	accountSvc          accountSvc
+	client              cosmosClient
+	logger              *zap.Logger
+	FulfillDemandOrders func(demandOrder ...*demandOrder) error
 
 	newOrdersCh       chan []*demandOrder
 	fulfilledOrdersCh chan<- *orderBatch
 }
 
+type cosmosClient interface {
+	BroadcastTx(accountName string, msgs ...sdk.Msg) (cosmosclient.Response, error)
+	Context() client.Context
+}
+
+type accountSvc interface {
+	address() string
+	getAccountName() string
+	getBalances() sdk.Coins
+	setBalances(sdk.Coins)
+	ensureBalances(ctx context.Context, coins sdk.Coins) ([]string, error)
+	sendCoins(ctx context.Context, coins sdk.Coins, toAddrStr string) error
+	getAccountBalances(ctx context.Context) (sdk.Coins, error)
+	updateFunds(ctx context.Context, opts ...fundsOption) error
+	balanceOf(denom string) sdk.Int
+	refreshBalances(ctx context.Context) error
+}
+
 func newOrderFulfiller(
-	accountSvc *accountService,
+	accountSvc accountSvc,
 	newOrdersCh chan []*demandOrder,
 	fulfilledOrdersCh chan<- *orderBatch,
-	client cosmosclient.Client,
+	client cosmosClient,
 	logger *zap.Logger,
 ) *orderFulfiller {
-	return &orderFulfiller{
+	o := &orderFulfiller{
 		accountSvc:        accountSvc,
 		client:            client,
 		fulfilledOrdersCh: fulfilledOrdersCh,
 		newOrdersCh:       newOrdersCh,
-		logger:            logger.With(zap.String("module", "order-fulfiller"), zap.String("name", accountSvc.accountName)),
+		logger:            logger.With(zap.String("module", "order-fulfiller"), zap.String("name", accountSvc.getAccountName())),
 	}
+	o.FulfillDemandOrders = o.fulfillDemandOrders
+	return o
 }
 
 // add command that creates all the bots to be used?
 
 func buildBot(
-	ctx context.Context,
 	name string,
 	logger *zap.Logger,
 	config botConfig,
@@ -56,7 +77,7 @@ func buildBot(
 		return nil, fmt.Errorf("failed to create cosmos client for bot: %s;err: %w", name, err)
 	}
 
-	accountSvc, err := newAccountService(
+	as, err := newAccountService(
 		cosmosClient,
 		store,
 		logger,
@@ -69,7 +90,7 @@ func buildBot(
 		return nil, fmt.Errorf("failed to create account service for bot: %s;err: %w", name, err)
 	}
 
-	return newOrderFulfiller(accountSvc, newOrderCh, fulfilledCh, cosmosClient, logger), nil
+	return newOrderFulfiller(as, newOrderCh, fulfilledCh, cosmosClient, logger), nil
 }
 
 func (ol *orderFulfiller) start(ctx context.Context) error {
@@ -77,7 +98,7 @@ func (ol *orderFulfiller) start(ctx context.Context) error {
 		return fmt.Errorf("failed to update account funds: %w", err)
 	}
 
-	ol.logger.Info("starting fulfiller...", zap.String("balances", ol.accountSvc.balances.String()))
+	ol.logger.Info("starting fulfiller...", zap.String("balances", ol.accountSvc.getBalances().String()))
 
 	ol.fulfillOrders(ctx)
 	return nil
@@ -106,11 +127,12 @@ func (ol *orderFulfiller) processBatch(ctx context.Context, batch []*demandOrder
 
 	for _, order := range batch {
 		coins = coins.Add(order.amount...)
+		coins = coins.Sub(order.fee...)
 	}
 
 	ol.logger.Debug("ensuring balances for orders")
 
-	ensuredDenoms, err := ol.accountSvc.ensureBalances(coins)
+	ensuredDenoms, err := ol.accountSvc.ensureBalances(ctx, coins)
 	if err != nil {
 		return fmt.Errorf("failed to ensure balances: %w", err)
 	}
@@ -138,7 +160,7 @@ outer:
 	if len(ids) == 0 {
 		ol.logger.Debug(
 			"no orders to fulfill",
-			zap.String("bot-name", ol.accountSvc.accountName),
+			zap.String("bot-name", ol.accountSvc.getAccountName()),
 			zap.Int("leftover count", len(leftoverBatch)),
 		)
 		return nil
@@ -146,7 +168,7 @@ outer:
 
 	ol.logger.Info("fulfilling orders", zap.Int("count", len(ids)))
 
-	if err := ol.fulfillDemandOrders(demandOrders...); err != nil {
+	if err := ol.FulfillDemandOrders(demandOrders...); err != nil {
 		return fmt.Errorf("failed to fulfill orders: ids: %v; %w", ids, err)
 	}
 
@@ -170,7 +192,7 @@ outer:
 
 		ol.fulfilledOrdersCh <- &orderBatch{
 			orders:    demandOrders,
-			fulfiller: ol.accountSvc.account.GetAddress().String(),
+			fulfiller: ol.accountSvc.address(),
 		}
 	}()
 
@@ -181,10 +203,10 @@ func (ol *orderFulfiller) fulfillDemandOrders(demandOrder ...*demandOrder) error
 	msgs := make([]sdk.Msg, len(demandOrder))
 
 	for i, order := range demandOrder {
-		msgs[i] = types.NewMsgFulfillOrder(ol.accountSvc.account.GetAddress().String(), order.id, order.feeStr)
+		msgs[i] = types.NewMsgFulfillOrder(ol.accountSvc.address(), order.id, order.feeStr)
 	}
 
-	_, err := ol.client.BroadcastTx(ol.accountSvc.accountName, msgs...)
+	_, err := ol.client.BroadcastTx(ol.accountSvc.getAccountName(), msgs...)
 	if err != nil {
 		return fmt.Errorf("failed to broadcast tx: %w", err)
 	}

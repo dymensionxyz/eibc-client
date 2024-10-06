@@ -21,6 +21,7 @@ type orderTracker struct {
 	fullNodeClients []rpcclient.Client
 	store           botStore
 	logger          *zap.Logger
+	bots            map[string]*orderFulfiller
 
 	fomu            sync.Mutex
 	fulfilledOrders map[string]struct{}
@@ -54,6 +55,7 @@ func newOrderTracker(
 	fullNodeClients []rpcclient.Client,
 	store botStore,
 	fulfilledOrdersCh chan *orderBatch,
+	bots map[string]*orderFulfiller,
 	subscriberID string,
 	batchSize int,
 	fCriteria *fulfillCriteria,
@@ -66,6 +68,7 @@ func newOrderTracker(
 		store:             store,
 		pool:              orderPool{orders: make(map[string]*demandOrder)},
 		fulfilledOrdersCh: fulfilledOrdersCh,
+		bots:              bots,
 		batchSize:         batchSize,
 		fulfillCriteria:   fCriteria,
 		validOrdersCh:     make(chan []*demandOrder),
@@ -88,7 +91,7 @@ func (or *orderTracker) start(ctx context.Context) error {
 
 	or.selectOrdersWorker(ctx)
 
-	go or.syncStore(ctx)
+	// go or.syncStore(ctx) TODO: do we really need all the orders in the store before fulfilling?
 	go or.fulfilledOrdersWorker(ctx)
 
 	return nil
@@ -352,7 +355,7 @@ func (or *orderTracker) addFulfilledOrders(ctx context.Context, batch *orderBatc
 	}
 	or.fomu.Unlock()
 
-	if err := or.store.UpdateManyOrders(ctx, storeOrders); err != nil {
+	if err := or.store.SaveManyOrders(ctx, storeOrders); err != nil {
 		return fmt.Errorf("failed to save orders: %w", err)
 	}
 
@@ -486,6 +489,7 @@ func (or *orderTracker) finalizeOrderWithID(ctx context.Context, id string) erro
 		balances = balances.Add(orderAmount)
 		b.PendingRewards = store.CoinsToStrings(pendingRewards)
 		b.Balances = store.CoinsToStrings(balances)
+		or.bots[b.Name].accountSvc.setBalances(balances)
 	}
 
 	if err := or.store.SaveBot(ctx, b); err != nil {

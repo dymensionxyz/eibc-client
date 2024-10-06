@@ -26,6 +26,8 @@ type orderClient struct {
 	orderEventer *orderEventer
 	orderPoller  *orderPoller
 	orderTracker *orderTracker
+
+	stopCh chan struct{}
 }
 
 func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
@@ -72,11 +74,15 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		return nil, fmt.Errorf("failed to create full node clients: %w", err)
 	}
 
+	// create bots
+	bots := make(map[string]*orderFulfiller)
+
 	ordTracker := newOrderTracker(
 		hubClient.RPC,
 		fullNodeClients,
 		bstore,
 		fulfilledOrdersCh,
+		bots,
 		subscriberID,
 		config.Bots.MaxOrdersPerTx,
 		&config.FulfillCriteria,
@@ -95,7 +101,6 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	slackClient := newSlacker(config.SlackConfig, logger)
 
 	whaleSvc, err := buildWhale(
-		ctx,
 		logger,
 		config.Whale,
 		slackClient,
@@ -117,18 +122,14 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		gasPrices:      config.Gas.Prices,
 	}
 
-	accs, err := addBotAccounts(ctx, config.Bots.NumberOfBots, botClientCfg, logger)
+	accs, err := addBotAccounts(config.Bots.NumberOfBots, botClientCfg, logger)
 	if err != nil {
 		return nil, err
 	}
 
-	// create bots
-	bots := make(map[string]*orderFulfiller)
-
 	var botIdx int
 	for botIdx = range config.Bots.NumberOfBots {
 		b, err := buildBot(
-			ctx,
 			accs[botIdx],
 			logger,
 			config.Bots,
@@ -142,7 +143,7 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create bot: %w", err)
 		}
-		bots[b.accountSvc.accountName] = b
+		bots[b.accountSvc.getAccountName()] = b
 	}
 
 	if !config.SkipRefund {
@@ -165,11 +166,12 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		whale:        whaleSvc,
 		config:       config,
 		logger:       logger,
+		stopCh:       make(chan struct{}),
 	}
 
 	if config.OrderPolling.Enabled {
 		oc.orderPoller = newOrderPoller(
-			hubClient,
+			hubClient.Context().ChainID,
 			ordTracker,
 			config.OrderPolling,
 			logger,
@@ -249,12 +251,16 @@ func (oc *orderClient) start(ctx context.Context) error {
 	}
 
 	// TODO: block more nicely
-	<-make(chan struct{})
+	<-oc.stopCh
 
 	return nil
 }
 
-func addBotAccounts(ctx context.Context, numBots int, botConfig clientConfig, logger *zap.Logger) ([]string, error) {
+func (oc *orderClient) stop() {
+	close(oc.stopCh)
+}
+
+func addBotAccounts(numBots int, botConfig clientConfig, logger *zap.Logger) ([]string, error) {
 	cosmosClient, err := cosmosclient.New(getCosmosClientOptions(botConfig)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cosmos client for bot: %w", err)
@@ -291,7 +297,7 @@ func refundFromExtraBotsToWhale(
 	config Config,
 	startBotIdx int,
 	accs []string,
-	whaleAccSvc *accountService,
+	whaleAccSvc accountSvc,
 	gasFeesStr string,
 	logger *zap.Logger,
 ) {
@@ -316,7 +322,6 @@ func refundFromExtraBotsToWhale(
 	// return funds from extra bots to whale
 	for ; startBotIdx < len(accs); startBotIdx++ {
 		b, err := buildBot(
-			ctx,
 			accs[startBotIdx],
 			logger,
 			config.Bots,
@@ -334,27 +339,27 @@ func refundFromExtraBotsToWhale(
 			continue
 		}
 
-		if b.accountSvc.balances.IsZero() {
+		if b.accountSvc.getBalances().IsZero() {
 			continue
 		}
 
 		// if bot doesn't have enough DYM to pay the fees
 		// transfer some from the whale
 		if diff := gasFees.Amount.Sub(b.accountSvc.balanceOf(gasFees.Denom)); diff.IsPositive() {
-			logger.Info("topping up bot account", zap.String("bot", b.accountSvc.accountName),
+			logger.Info("topping up bot account", zap.String("bot", b.accountSvc.getAccountName()),
 				zap.String("denom", gasFees.Denom), zap.String("amount", diff.String()))
 			topUp := sdk.NewCoin(gasFees.Denom, diff)
-			if err := whaleAccSvc.sendCoins(sdk.NewCoins(topUp), b.accountSvc.address()); err != nil {
+			if err := whaleAccSvc.sendCoins(ctx, sdk.NewCoins(topUp), b.accountSvc.address()); err != nil {
 				logger.Error("failed to top up bot account with gas", zap.Error(err))
 				continue
 			}
 			// update bot balance with topped up gas amount
-			b.accountSvc.balances = b.accountSvc.balances.Add(topUp)
+			b.accountSvc.setBalances(b.accountSvc.getBalances().Add(topUp))
 		}
 		// subtract gas fees from bot balance, so there is enough to pay for the fees
-		b.accountSvc.balances = b.accountSvc.balances.Sub(gasFees)
+		b.accountSvc.setBalances(b.accountSvc.getBalances().Sub(gasFees))
 
-		if err = b.accountSvc.sendCoins(b.accountSvc.balances, whaleAccSvc.address()); err != nil {
+		if err = b.accountSvc.sendCoins(ctx, b.accountSvc.getBalances(), whaleAccSvc.address()); err != nil {
 			logger.Error("failed to return funds to whale", zap.Error(err))
 			continue
 		}
@@ -364,7 +369,7 @@ func refundFromExtraBotsToWhale(
 			continue
 		}
 
-		refunded = refunded.Add(b.accountSvc.balances...)
+		refunded = refunded.Add(b.accountSvc.getBalances()...)
 	}
 
 	if !refunded.Empty() {

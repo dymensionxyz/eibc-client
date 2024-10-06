@@ -12,30 +12,30 @@ import (
 	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 	"go.uber.org/zap"
 )
 
 type orderPoller struct {
-	client        cosmosclient.Client
+	chainID       string
 	indexerURL    string
 	interval      time.Duration
 	indexerClient *http.Client
 	logger        *zap.Logger
 
+	getOrders    func() ([]Order, error)
 	orderTracker *orderTracker
 	sync.Mutex
 	pathMap map[string]string
 }
 
 func newOrderPoller(
-	client cosmosclient.Client,
+	chainID string,
 	orderTracker *orderTracker,
 	pollingCfg OrderPollingConfig,
 	logger *zap.Logger,
 ) *orderPoller {
-	return &orderPoller{
-		client:        client,
+	o := &orderPoller{
+		chainID:       chainID,
 		indexerURL:    pollingCfg.IndexerURL,
 		interval:      pollingCfg.Interval,
 		logger:        logger.With(zap.String("module", "order-poller")),
@@ -43,6 +43,8 @@ func newOrderPoller(
 		pathMap:       make(map[string]string),
 		indexerClient: &http.Client{Timeout: 25 * time.Second},
 	}
+	o.getOrders = o.getDemandOrdersFromIndexer
+	return o
 }
 
 const (
@@ -81,7 +83,7 @@ func (p *orderPoller) start(ctx context.Context) {
 }
 
 func (p *orderPoller) pollPendingDemandOrders() error {
-	demandOrders, err := p.getDemandOrdersFromIndexer()
+	demandOrders, err := p.getOrders()
 	if err != nil {
 		return fmt.Errorf("failed to get demand orders: %w", err)
 	}
@@ -158,7 +160,7 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 func (p *orderPoller) getDemandOrdersFromIndexer() ([]Order, error) {
 	p.logger.Debug("getting demand orders from indexer")
 
-	queryStr := fmt.Sprintf(ordersQuery, p.client.Context().ChainID)
+	queryStr := fmt.Sprintf(ordersQuery, p.chainID)
 	body := strings.NewReader(queryStr)
 
 	resp, err := p.indexerClient.Post(p.indexerURL, "application/json", body)

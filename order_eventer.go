@@ -7,6 +7,7 @@ import (
 	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	rpcclient "github.com/tendermint/tendermint/rpc/client"
 	tmtypes "github.com/tendermint/tendermint/rpc/core/types"
 	"go.uber.org/zap"
 
@@ -14,8 +15,9 @@ import (
 )
 
 type orderEventer struct {
-	client cosmosclient.Client
-	logger *zap.Logger
+	rpc         rpcclient.Client
+	eventClient rpcclient.EventsClient
+	logger      *zap.Logger
 
 	orderTracker *orderTracker
 	subscriberID string
@@ -28,7 +30,8 @@ func newOrderEventer(
 	logger *zap.Logger,
 ) *orderEventer {
 	return &orderEventer{
-		client:       client,
+		rpc:          client.RPC,
+		eventClient:  client.WSEvents,
 		subscriberID: subscriberID,
 		logger:       logger.With(zap.String("module", "order-eventer")),
 		orderTracker: orderTracker,
@@ -36,7 +39,7 @@ func newOrderEventer(
 }
 
 func (e *orderEventer) start(ctx context.Context) error {
-	if err := e.client.RPC.Start(); err != nil {
+	if err := e.rpc.Start(); err != nil {
 		return fmt.Errorf("start rpc client: %w", err)
 	}
 
@@ -134,7 +137,7 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 func (e *orderEventer) subscribeToPendingDemandOrders(ctx context.Context) error {
 	const query = createdEvent + ".is_fulfilled='false'"
 
-	resCh, err := e.client.WSEvents.Subscribe(ctx, e.subscriberID, query)
+	resCh, err := e.eventClient.Subscribe(ctx, e.subscriberID, query)
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to demand orders: %w", err)
 	}

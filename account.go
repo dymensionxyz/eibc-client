@@ -3,10 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
+	"cosmossdk.io/math"
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/crypto/keyring"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -14,7 +14,9 @@ import (
 	"github.com/cosmos/cosmos-sdk/x/auth/types"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	"github.com/google/uuid"
+	"github.com/ignite/cli/ignite/pkg/cosmosaccount"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 
@@ -22,20 +24,28 @@ import (
 )
 
 type accountService struct {
-	client            cosmosclient.Client
+	client            cosmosClient
+	bankClient        bankClient
+	accountRegistry   cosmosaccount.Registry
 	store             accountStore
 	logger            *zap.Logger
 	account           client.Account
 	balances          sdk.Coins
 	minimumGasBalance sdk.Coin
 	accountName       string
+	homeDir           string
 	topUpFactor       int
 	topUpCh           chan<- topUpRequest
+	asyncClient       bool
 }
 
 type accountStore interface {
 	GetBot(ctx context.Context, address string, _ ...store.BotOption) (*store.Bot, error)
 	SaveBot(ctx context.Context, bot *store.Bot) error
+}
+
+type bankClient interface {
+	SpendableBalances(ctx context.Context, in *banktypes.QuerySpendableBalancesRequest, opts ...grpc.CallOption) (*banktypes.QuerySpendableBalancesResponse, error)
 }
 
 type option func(*accountService)
@@ -57,9 +67,12 @@ func newAccountService(
 ) (*accountService, error) {
 	a := &accountService{
 		client:            client,
+		accountRegistry:   client.AccountRegistry,
 		store:             store,
 		logger:            logger.With(zap.String("module", "account-service")),
 		accountName:       accountName,
+		homeDir:           client.Context().HomeDir,
+		bankClient:        banktypes.NewQueryClient(client.Context()),
 		minimumGasBalance: minimumGasBalance,
 		topUpCh:           topUpCh,
 	}
@@ -137,7 +150,7 @@ func createBotAccounts(client cosmosclient.Client, count int) (names []string, e
 
 // TODO: if not found...?
 func (a *accountService) setupAccount() error {
-	acc, err := a.client.AccountRegistry.GetByName(a.accountName)
+	acc, err := a.accountRegistry.GetByName(a.accountName)
 	if err != nil {
 		return fmt.Errorf("failed to get account: %w", err)
 	}
@@ -147,16 +160,20 @@ func (a *accountService) setupAccount() error {
 		zap.String("name", a.accountName),
 		zap.String("pub key", a.account.GetPubKey().String()),
 		zap.String("address", a.account.GetAddress().String()),
-		zap.String("keyring-backend", a.client.AccountRegistry.Keyring.Backend()),
-		zap.String("home-dir", a.client.Context().HomeDir),
+		zap.String("keyring-backend", a.accountRegistry.Keyring.Backend()),
+		zap.String("home-dir", a.homeDir),
 	)
 	return nil
 }
 
-func (a *accountService) ensureBalances(coins sdk.Coins) ([]string, error) {
+func (a *accountService) ensureBalances(ctx context.Context, coins sdk.Coins) ([]string, error) {
 	// check if gas balance is below minimum
-	gasBalance := a.balanceOf(a.minimumGasBalance.Denom)
-	gasDiff := a.minimumGasBalance.Amount.Sub(gasBalance)
+	gasDiff := math.NewInt(0)
+	if !a.minimumGasBalance.IsNil() && a.minimumGasBalance.IsPositive() {
+		gasBalance := a.balanceOf(a.minimumGasBalance.Denom)
+		gasDiff = math.NewInt(0)
+		a.minimumGasBalance.Amount.Sub(gasBalance)
+	}
 
 	toTopUp := sdk.NewCoins()
 	if gasDiff.IsPositive() {
@@ -172,7 +189,9 @@ func (a *accountService) ensureBalances(coins sdk.Coins) ([]string, error) {
 		if diff.IsPositive() {
 			// add x times the coin amount to the top up
 			// to avoid frequent top ups
-			coin.Amount = coin.Amount.MulRaw(int64(a.topUpFactor))
+			if a.topUpFactor > 0 {
+				coin.Amount = coin.Amount.MulRaw(int64(a.topUpFactor))
+			}
 			toTopUp = toTopUp.Add(coin) // add the whole amount instead of the difference
 		} else {
 			fundedDenoms = append(fundedDenoms, coin.Denom)
@@ -194,13 +213,24 @@ func (a *accountService) ensureBalances(coins sdk.Coins) ([]string, error) {
 
 	a.topUpCh <- topUpReq
 	res := <-resCh
+	a.logger.Debug("topped up denoms", zap.Strings("denoms", res))
 	close(resCh)
 
-	fundedDenoms = slices.Concat(fundedDenoms, res)
+	if err := a.refreshBalances(ctx); err != nil {
+		return nil, fmt.Errorf("failed to refresh account balances: %w", err)
+	}
+
+	for _, coin := range coins {
+		balance := a.balanceOf(coin.Denom)
+		if balance.GTE(coin.Amount) {
+			fundedDenoms = append(fundedDenoms, coin.Denom)
+		}
+	}
+
 	return fundedDenoms, nil
 }
 
-func (a *accountService) sendCoins(coins sdk.Coins, toAddrStr string) error {
+func (a *accountService) sendCoins(ctx context.Context, coins sdk.Coins, toAddrStr string) error {
 	toAddr, err := sdk.AccAddressFromBech32(toAddrStr)
 	if err != nil {
 		return fmt.Errorf("failed to parse address: %w", err)
@@ -218,8 +248,14 @@ func (a *accountService) sendCoins(coins sdk.Coins, toAddrStr string) error {
 		return fmt.Errorf("failed to broadcast tx: %w", err)
 	}
 
-	if err = a.WaitForTx(rsp.TxHash); err != nil {
-		return fmt.Errorf("failed to wait for tx: %w", err)
+	if !a.asyncClient {
+		if err = a.WaitForTx(rsp.TxHash); err != nil {
+			return fmt.Errorf("failed to wait for tx: %w", err)
+		}
+	}
+
+	if err := a.refreshBalances(ctx); err != nil {
+		a.logger.Error("failed to refresh account balances", zap.Error(err))
 	}
 
 	a.logger.Debug("coins sent", zap.String("to", toAddrStr), zap.Duration("duration", time.Since(start)))
@@ -256,6 +292,9 @@ func (a *accountService) WaitForTx(txHash string) error {
 }
 
 func (a *accountService) balanceOf(denom string) sdk.Int {
+	if a.balances == nil {
+		return sdk.ZeroInt()
+	}
 	return a.balances.AmountOf(denom)
 }
 
@@ -291,7 +330,7 @@ func (a *accountService) updateFunds(ctx context.Context, opts ...fundsOption) e
 	}
 	if b == nil {
 		b = &store.Bot{
-			Address: a.account.GetAddress().String(),
+			Address: a.address(),
 			Name:    a.accountName,
 		}
 	}
@@ -332,13 +371,25 @@ func (a *accountService) address() string {
 }
 
 func (a *accountService) getAccountBalances(ctx context.Context) (sdk.Coins, error) {
-	resp, err := banktypes.NewQueryClient(a.client.Context()).SpendableBalances(ctx, &banktypes.QuerySpendableBalancesRequest{
-		Address: a.account.GetAddress().String(),
+	resp, err := a.bankClient.SpendableBalances(ctx, &banktypes.QuerySpendableBalancesRequest{
+		Address: a.address(),
 	})
 	if err != nil {
 		return nil, err
 	}
 	return resp.Balances, nil
+}
+
+func (a *accountService) getBalances() sdk.Coins {
+	return a.balances
+}
+
+func (a *accountService) setBalances(coins sdk.Coins) {
+	a.balances = coins
+}
+
+func (a *accountService) getAccountName() string {
+	return a.accountName
 }
 
 func mustConvertAccount(rec *keyring.Record) client.Account {

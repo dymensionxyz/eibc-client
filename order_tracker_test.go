@@ -8,11 +8,8 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/stretchr/testify/assert"
-	rpcclient "github.com/tendermint/tendermint/rpc/client"
 	coretypes "github.com/tendermint/tendermint/rpc/core/types"
 	"go.uber.org/zap"
-
-	"github.com/dymensionxyz/eibc-client/store"
 )
 
 func Test_orderTracker_canFulfillOrder(t *testing.T) {
@@ -152,8 +149,8 @@ var (
 func Test_worker_sequencerMode(t *testing.T) {
 	tests := []struct {
 		name             string
-		fullNodeClients  []*mockCosmosClient
-		store            mockStore
+		fullNodeClients  []*mockNodeClient
+		store            *mockStore
 		fulfillmentLevel fulfillmentLevel
 		minConfirmations int
 		batchSize        int
@@ -189,7 +186,7 @@ func Test_worker_sequencerMode(t *testing.T) {
 			name:             "fulfill orders in p2p mode",
 			fulfillmentLevel: fulfillmentModeP2P,
 			minConfirmations: 1,
-			fullNodeClients: []*mockCosmosClient{{
+			fullNodeClients: []*mockNodeClient{{
 				blocks: map[int64]*coretypes.ResultBlock{
 					1: {}, 2: {}, 3: {}, 4: {}, 5: {}, 6: {}, 7: {}, 8: {}, 9: {}, 10: {},
 				},
@@ -202,7 +199,7 @@ func Test_worker_sequencerMode(t *testing.T) {
 			name:             "fulfill orders in p2p mode: no blocks 6 and 9",
 			fulfillmentLevel: fulfillmentModeP2P,
 			minConfirmations: 1,
-			fullNodeClients: []*mockCosmosClient{{
+			fullNodeClients: []*mockNodeClient{{
 				blocks: map[int64]*coretypes.ResultBlock{
 					1: {}, 2: {}, 3: {}, 4: {}, 5: {}, 7: {}, 8: {}, 10: {},
 				},
@@ -215,7 +212,7 @@ func Test_worker_sequencerMode(t *testing.T) {
 			name:             "fulfill orders in p2p mode: 2/3 nodes validated",
 			fulfillmentLevel: fulfillmentModeP2P,
 			minConfirmations: 2,
-			fullNodeClients: []*mockCosmosClient{
+			fullNodeClients: []*mockNodeClient{
 				{
 					blocks: map[int64]*coretypes.ResultBlock{
 						1: {}, 2: {}, 3: nil, 4: {}, 5: {}, 6: {}, 7: nil, 8: {}, 9: {}, 10: {},
@@ -238,7 +235,7 @@ func Test_worker_sequencerMode(t *testing.T) {
 			name:             "fulfill orders in p2p mode: half orders 2/3 validated, other half 1/3 validated",
 			fulfillmentLevel: fulfillmentModeP2P,
 			minConfirmations: 2,
-			fullNodeClients: []*mockCosmosClient{
+			fullNodeClients: []*mockNodeClient{
 				{
 					blocks: map[int64]*coretypes.ResultBlock{
 						1: {}, 2: {}, 3: nil, 4: {}, 5: {}, 6: {}, 7: nil, 8: {}, 9: {}, 10: nil,
@@ -261,7 +258,7 @@ func Test_worker_sequencerMode(t *testing.T) {
 			name:             "fulfill orders in p2p mode: orders hit deadline",
 			fulfillmentLevel: fulfillmentModeP2P,
 			minConfirmations: 1,
-			fullNodeClients: []*mockCosmosClient{
+			fullNodeClients: []*mockNodeClient{
 				{
 					blocks: map[int64]*coretypes.ResultBlock{},
 				},
@@ -278,7 +275,7 @@ func Test_worker_sequencerMode(t *testing.T) {
 			fulfillOrderCh := make(chan []*demandOrder)
 
 			ot := &orderTracker{
-				hubClient:       &mockCosmosClient{},
+				hubClient:       &mockNodeClient{},
 				fullNodeClients: transformFullNodeClients(tt.fullNodeClients),
 				store:           tt.store,
 				logger:          zap.NewNop(),
@@ -344,59 +341,3 @@ func generateOrderIDs(n int) (ids []string) {
 	}
 	return
 }
-
-type mockCosmosClient struct {
-	rpcclient.Client
-	successfulAttempt int
-	attemptCounter    int
-	blocks            map[int64]*coretypes.ResultBlock
-}
-
-func (m *mockCosmosClient) Subscribe(context.Context, string, string, ...int) (out <-chan coretypes.ResultEvent, err error) {
-	return make(chan coretypes.ResultEvent), nil
-}
-
-func (m *mockCosmosClient) Block(_ context.Context, h *int64) (*coretypes.ResultBlock, error) {
-	if len(m.blocks) == 0 {
-		return nil, fmt.Errorf("no block")
-	}
-	m.attemptCounter++
-	if m.attemptCounter < m.successfulAttempt {
-		return nil, fmt.Errorf("failed to get block")
-	}
-	if h == nil {
-		return nil, fmt.Errorf("block height is nil")
-	}
-	return m.blocks[*h], nil
-}
-
-func transformFullNodeClients(clients []*mockCosmosClient) []rpcclient.Client {
-	var c []rpcclient.Client
-	for _, client := range clients {
-		c = append(c, client)
-	}
-	return c
-}
-
-type mockStore struct {
-	botStore
-	orders []*store.Order
-}
-
-func (m mockStore) GetOrders(context.Context, ...store.OrderOption) ([]*store.Order, error) {
-	return m.orders, nil
-}
-
-func (m mockStore) GetOrder(_ context.Context, id string) (*store.Order, error) {
-	var order *store.Order
-	for _, o := range m.orders {
-		if o.ID == id {
-			order = o
-			break
-		}
-	}
-	return order, nil
-}
-
-func (m mockStore) SaveManyOrders(context.Context, []*store.Order) error { return nil }
-func (m mockStore) DeleteOrder(context.Context, string) error            { return nil }
