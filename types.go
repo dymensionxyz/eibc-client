@@ -51,13 +51,19 @@ func (o *demandOrder) feePercentage() float32 {
 }
 
 func fromStoreOrder(order *store.Order) (*demandOrder, error) {
-	fee, err := sdk.ParseCoinsNormalized(order.Fee)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse fee: %w", err)
+	if order.Fee == "" {
+		return nil, fmt.Errorf("fee is empty")
 	}
 	amount, err := sdk.ParseCoinsNormalized(order.Amount)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse amount: %w", err)
+	}
+	if amount.Empty() {
+		return nil, fmt.Errorf("amount is empty")
+	}
+	fee, err := sdk.ParseCoinsNormalized(order.Fee + amount.GetDenomByIndex(0))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse fee: %w", err)
 	}
 	return &demandOrder{
 		id:            order.ID,

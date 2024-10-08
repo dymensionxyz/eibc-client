@@ -150,7 +150,6 @@ func Test_worker_sequencerMode(t *testing.T) {
 	tests := []struct {
 		name             string
 		fullNodeClients  []*mockNodeClient
-		store            *mockStore
 		fulfillmentLevel fulfillmentLevel
 		minConfirmations int
 		batchSize        int
@@ -277,7 +276,7 @@ func Test_worker_sequencerMode(t *testing.T) {
 			ot := &orderTracker{
 				hubClient:       &mockNodeClient{},
 				fullNodeClients: transformFullNodeClients(tt.fullNodeClients),
-				store:           tt.store,
+				store:           &mockStore{},
 				logger:          zap.NewNop(),
 				fulfilledOrders: make(map[string]*demandOrder),
 				validOrdersCh:   make(chan []*demandOrder),

@@ -8,16 +8,19 @@ import (
 	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 	"github.com/pkg/errors"
 	rpcclient "github.com/tendermint/tendermint/rpc/client"
 	tmtypes "github.com/tendermint/tendermint/rpc/core/types"
 	"go.uber.org/zap"
 
 	"github.com/dymensionxyz/eibc-client/store"
+	"github.com/dymensionxyz/eibc-client/types"
 )
 
 type orderTracker struct {
 	hubClient       rpcclient.Client
+	broadcastTx     broadcastTxFn
 	fullNodeClients []rpcclient.Client
 	store           botStore
 	logger          *zap.Logger
@@ -42,6 +45,8 @@ const (
 	defaultFinalizedCheckerInterval = 20 * time.Second
 )
 
+type broadcastTxFn func(accName string, msgs ...sdk.Msg) (cosmosclient.Response, error)
+
 type botStore interface {
 	GetOrders(ctx context.Context, opts ...store.OrderOption) ([]*store.Order, error)
 	GetOrder(ctx context.Context, id string) (*store.Order, error)
@@ -56,6 +61,7 @@ type botStore interface {
 
 func newOrderTracker(
 	hubClient rpcclient.Client,
+	broadcastTx broadcastTxFn,
 	fullNodeClients []rpcclient.Client,
 	store botStore,
 	fulfilledOrdersCh chan *orderBatch,
@@ -69,6 +75,7 @@ func newOrderTracker(
 ) *orderTracker {
 	return &orderTracker{
 		hubClient:                hubClient,
+		broadcastTx:              broadcastTx,
 		fullNodeClients:          fullNodeClients,
 		store:                    store,
 		pool:                     orderPool{orders: make(map[string]*demandOrder)},
@@ -295,7 +302,8 @@ func (or *orderTracker) loadTrackedOrders(ctx context.Context) error {
 	for _, order := range fulfilledOrders {
 		ord, err := fromStoreOrder(order)
 		if err != nil {
-			return fmt.Errorf("failed to convert order: %w", err)
+			or.logger.Error("failed to convert order", zap.Error(err))
+			continue
 		}
 		or.fulfilledOrders[order.ID] = ord
 		countFulfilled++
@@ -488,7 +496,7 @@ func (or *orderTracker) checkIfFinalized(ctx context.Context) error {
 	or.fomu.Lock()
 	var orderIDsToFinalize []string
 	for id, order := range or.fulfilledOrders {
-		if currentHeight-order.blockHeight >= disputePeriodInBlocks {
+		if currentHeight >= order.blockHeight+disputePeriodInBlocks {
 			orderIDsToFinalize = append(orderIDsToFinalize, id)
 		}
 	}
@@ -505,8 +513,9 @@ func (or *orderTracker) checkIfFinalized(ctx context.Context) error {
 
 func (or *orderTracker) finalizeOrderWithID(ctx context.Context, id string) error {
 	or.fomu.Lock()
+	defer or.fomu.Unlock()
+
 	_, ok := or.fulfilledOrders[id]
-	or.fomu.Unlock()
 	if !ok {
 		return nil
 	}
@@ -519,6 +528,10 @@ func (or *orderTracker) finalizeOrderWithID(ctx context.Context, id string) erro
 	b, err := or.store.GetBot(ctx, order.Fulfiller)
 	if err != nil {
 		return fmt.Errorf("failed to get bot: %w", err)
+	}
+
+	if err = or.finalizeHubOrders(ctx, b.Name, order); err != nil {
+		return fmt.Errorf("failed to finalize order: %w", err)
 	}
 
 	orderAmount, err := sdk.ParseCoinNormalized(order.Amount)
@@ -552,11 +565,41 @@ func (or *orderTracker) finalizeOrderWithID(ctx context.Context, id string) erro
 		return fmt.Errorf("failed to delete order: %w", err)
 	}
 
-	or.fomu.Lock()
 	delete(or.fulfilledOrders, id)
-	or.fomu.Unlock()
 
 	or.logger.Info("finalized order", zap.String("id", id))
+
+	return nil
+}
+
+func (or *orderTracker) finalizeHubOrders(ctx context.Context, ownerName string, orders ...*store.Order) error {
+	asvc := or.bots[ownerName].accountSvc
+	// ensure fees
+	_, err := asvc.ensureBalances(ctx, sdk.Coins{})
+	if err != nil {
+		return fmt.Errorf("failed to ensure balances: %w", err)
+	}
+
+	msgs := make([]sdk.Msg, len(orders))
+
+	for i, order := range orders {
+		msgs[i] = &types.MsgFinalizeRollappPacketsByReceiver{
+			Sender:    order.Fulfiller,
+			RollappId: order.RollappID,
+			Receiver:  order.Fulfiller,
+		}
+	}
+
+	rsp, err := or.broadcastTx(ownerName, msgs...)
+	if err != nil {
+		return fmt.Errorf("failed to broadcast tx: %w", err)
+	}
+
+	if err = asvc.waitForTx(rsp.TxHash); err != nil {
+		return fmt.Errorf("failed to wait for tx: %w", err)
+	}
+
+	or.logger.Debug("finalized orders", zap.String("response", rsp.String()))
 
 	return nil
 }

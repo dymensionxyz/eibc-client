@@ -38,6 +38,7 @@ type accountSvc interface {
 	getAccountBalances(ctx context.Context) (sdk.Coins, error)
 	updateFunds(ctx context.Context, opts ...fundsOption) error
 	balanceOf(denom string) sdk.Int
+	waitForTx(txHash string) error
 	refreshBalances(ctx context.Context) error
 }
 
@@ -206,9 +207,15 @@ func (ol *orderFulfiller) fulfillDemandOrders(demandOrder ...*demandOrder) error
 		msgs[i] = types.NewMsgFulfillOrder(ol.accountSvc.address(), order.id, order.feeStr)
 	}
 
-	_, err := ol.client.BroadcastTx(ol.accountSvc.getAccountName(), msgs...)
+	rsp, err := ol.client.BroadcastTx(ol.accountSvc.getAccountName(), msgs...)
 	if err != nil {
 		return fmt.Errorf("failed to broadcast tx: %w", err)
+	}
+
+	ol.logger.Info("broadcast tx", zap.String("tx-hash", rsp.TxHash))
+
+	if err = ol.accountSvc.waitForTx(rsp.TxHash); err != nil {
+		return fmt.Errorf("failed to wait for tx: %w", err)
 	}
 
 	return nil

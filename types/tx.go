@@ -2,6 +2,7 @@ package types
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 
 	errorsmod "cosmossdk.io/errors"
@@ -13,6 +14,7 @@ import (
 var (
 	_ = sdk.Msg(&MsgFulfillOrder{})
 	_ = sdk.Msg(&MsgUpdateDemandOrder{})
+	_ = sdk.Msg(&MsgFinalizeRollappPacketsByReceiver{})
 )
 
 func NewMsgFulfillOrder(fulfillerAddress, orderId, expectedFee string) *MsgFulfillOrder {
@@ -118,4 +120,30 @@ func validateCommon(orderId, address, fee string) error {
 	}
 
 	return nil
+}
+
+func (m MsgFinalizeRollappPacketsByReceiver) ValidateBasic() error {
+	_, err := sdk.AccAddressFromBech32(m.Sender)
+	if err != nil {
+		return errors.Join(
+			sdkerrors.ErrInvalidAddress,
+			errorsmod.Wrapf(err, "sender must be a valid bech32 address: %s", m.Sender),
+		)
+	}
+	if len(m.RollappId) == 0 {
+		return fmt.Errorf("rollapp id must be non-empty")
+	}
+	if len(m.Receiver) == 0 {
+		return fmt.Errorf("receiver must be non-empty")
+	}
+	return nil
+}
+
+func (m MsgFinalizeRollappPacketsByReceiver) GetSigners() []sdk.AccAddress {
+	signer, _ := sdk.AccAddressFromBech32(m.Sender)
+	return []sdk.AccAddress{signer}
+}
+
+func (*MsgFinalizeRollappPacketsByReceiver) XXX_MessageName() string {
+	return "dymensionxyz.dymension.delayedack.MsgFinalizeRollappPacketsByReceiver"
 }

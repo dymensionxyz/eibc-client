@@ -295,6 +295,7 @@ func setupTestOrderClient(
 
 	ordTracker := newOrderTracker(
 		&trackerClient,
+		trackerClient.BroadcastTx,
 		fullNodeClients,
 		bstore,
 		fulfilledOrdersCh,
@@ -380,6 +381,7 @@ func setupTestOrderClient(
 		}
 		as.bankClient = bc
 		hc := hubClient
+		as.client = &hc
 		b := newOrderFulfiller(as, orderCh, fulfilledOrdersCh, &hc, logger)
 		b.FulfillDemandOrders = bc.mockFulfillDemandOrders
 		bots[b.accountSvc.getAccountName()] = b
@@ -452,7 +454,9 @@ func (m *mockNodeClient) BroadcastTx(_ string, msgs ...sdk.Msg) (cosmosclient.Re
 			}
 		}
 	}
-	return cosmosclient.Response{}, nil
+	return cosmosclient.Response{
+		TxResponse: &sdk.TxResponse{},
+	}, nil
 }
 
 func (m *mockNodeClient) Subscribe(_ context.Context, _ string, query string, _ ...int) (out <-chan coretypes.ResultEvent, err error) {

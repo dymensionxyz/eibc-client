@@ -171,8 +171,7 @@ func (a *accountService) ensureBalances(ctx context.Context, coins sdk.Coins) ([
 	gasDiff := math.NewInt(0)
 	if !a.minimumGasBalance.IsNil() && a.minimumGasBalance.IsPositive() {
 		gasBalance := a.balanceOf(a.minimumGasBalance.Denom)
-		gasDiff = math.NewInt(0)
-		a.minimumGasBalance.Amount.Sub(gasBalance)
+		gasDiff = a.minimumGasBalance.Amount.Sub(gasBalance)
 	}
 
 	toTopUp := sdk.NewCoins()
@@ -248,10 +247,8 @@ func (a *accountService) sendCoins(ctx context.Context, coins sdk.Coins, toAddrS
 		return fmt.Errorf("failed to broadcast tx: %w", err)
 	}
 
-	if !a.asyncClient {
-		if err = a.WaitForTx(rsp.TxHash); err != nil {
-			return fmt.Errorf("failed to wait for tx: %w", err)
-		}
+	if err = a.waitForTx(rsp.TxHash); err != nil {
+		return fmt.Errorf("failed to wait for tx: %w", err)
 	}
 
 	if err := a.refreshBalances(ctx); err != nil {
@@ -263,7 +260,10 @@ func (a *accountService) sendCoins(ctx context.Context, coins sdk.Coins, toAddrS
 	return nil
 }
 
-func (a *accountService) WaitForTx(txHash string) error {
+func (a *accountService) waitForTx(txHash string) error {
+	if a.asyncClient {
+		return nil
+	}
 	serviceClient := tx.NewServiceClient(a.client.Context())
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	ticker := time.NewTicker(time.Second)

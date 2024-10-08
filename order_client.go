@@ -79,6 +79,7 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 
 	ordTracker := newOrderTracker(
 		hubClient.RPC,
+		hubClient.BroadcastTx,
 		fullNodeClients,
 		bstore,
 		fulfilledOrdersCh,
