@@ -83,6 +83,7 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 	prices := res.Events[createdEvent+".price"]
 	fees := res.Events[createdEvent+".fee"]
 	statuses := res.Events[createdEvent+".packet_status"]
+	packetKeys := res.Events[createdEvent+".packet_key"]
 	rollapps := res.Events[createdEvent+".rollapp_id"]
 	heights := res.Events[createdEvent+".block_height"]
 	newOrders := make([]*demandOrder, 0, len(ids))
@@ -120,6 +121,7 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 			fee:           fee,
 			status:        statuses[i],
 			rollappId:     rollapps[i],
+			packetKey:     packetKeys[i],
 			blockHeight:   height,
 			validDeadline: validDeadline,
 		}

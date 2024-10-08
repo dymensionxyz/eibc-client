@@ -22,6 +22,7 @@ type demandOrder struct {
 	fee           sdk.Coins
 	feeStr        string
 	rollappId     string
+	packetKey     string
 	status        string
 	blockHeight   int64
 	validDeadline time.Time
@@ -71,6 +72,7 @@ func fromStoreOrder(order *store.Order) (*demandOrder, error) {
 		amount:        amount,
 		fee:           fee,
 		rollappId:     order.RollappID,
+		packetKey:     order.PacketKey,
 		status:        string(order.Status),
 		blockHeight:   order.BlockHeight,
 		validDeadline: time.Unix(order.ValidDeadline, 0),

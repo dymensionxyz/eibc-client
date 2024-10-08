@@ -48,7 +48,7 @@ func newOrderPoller(
 }
 
 const (
-	ordersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: {equalTo: EibcPending}}) {nodes { eibcOrderId amount destinationChannel blockHeight rollappId eibcFee }}}"}`
+	ordersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: {equalTo: EibcPending}}) {nodes { eibcOrderId amount destinationChannel blockHeight rollappId eibcFee packetKey }}}"}`
 )
 
 type Order struct {
@@ -57,6 +57,7 @@ type Order struct {
 	Fee         string `json:"eibcFee"`
 	RollappId   string `json:"rollappId"`
 	BlockHeight string `json:"blockHeight"`
+	PacketKey   string `json:"packetKey"`
 }
 
 type ordersResponse struct {
@@ -140,6 +141,7 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 			fee:           fee,
 			denom:         denom,
 			rollappId:     order.RollappId,
+			packetKey:     order.PacketKey,
 			blockHeight:   blockHeight,
 			validDeadline: validDeadline,
 		}

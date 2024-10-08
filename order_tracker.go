@@ -274,6 +274,7 @@ func (or *orderTracker) syncStore(ctx context.Context) {
 				Amount:        o.amount.String(),
 				Fee:           o.feeStr,
 				RollappID:     o.rollappId,
+				PacketKey:     o.packetKey,
 				BlockHeight:   o.blockHeight,
 				Status:        store.OrderStatusFulfilling, // always fulfilling status in the pool
 				ValidDeadline: o.validDeadline.Unix(),
@@ -365,6 +366,7 @@ func (or *orderTracker) addFulfilledOrders(ctx context.Context, batch *orderBatc
 			Amount:        order.amount[0].String(),
 			Fee:           order.feeStr,
 			RollappID:     order.rollappId,
+			PacketKey:     order.packetKey,
 			BlockHeight:   order.blockHeight,
 			Status:        store.OrderStatusPendingFinalization,
 			ValidDeadline: order.validDeadline.Unix(),
@@ -459,7 +461,7 @@ func (or *orderTracker) finalizeOrders(ctx context.Context, res tmtypes.ResultEv
 	}
 
 	for _, id := range ids {
-		if err := or.finalizeOrderWithID(ctx, id); err != nil {
+		if err := or.finalizeOrderWithID(ctx, id, true); err != nil {
 			return fmt.Errorf("failed to finalize order with id %s: %w", id, err)
 		}
 	}
@@ -503,7 +505,7 @@ func (or *orderTracker) checkIfFinalized(ctx context.Context) error {
 	or.fomu.Unlock()
 
 	for _, id := range orderIDsToFinalize {
-		if err := or.finalizeOrderWithID(ctx, id); err != nil {
+		if err := or.finalizeOrderWithID(ctx, id, false); err != nil {
 			or.logger.Error("failed to finalize order", zap.Error(err))
 		}
 	}
@@ -511,7 +513,7 @@ func (or *orderTracker) checkIfFinalized(ctx context.Context) error {
 	return nil
 }
 
-func (or *orderTracker) finalizeOrderWithID(ctx context.Context, id string) error {
+func (or *orderTracker) finalizeOrderWithID(ctx context.Context, id string, finalized bool) error {
 	or.fomu.Lock()
 	defer or.fomu.Unlock()
 
@@ -530,8 +532,10 @@ func (or *orderTracker) finalizeOrderWithID(ctx context.Context, id string) erro
 		return fmt.Errorf("failed to get bot: %w", err)
 	}
 
-	if err = or.finalizeHubOrders(ctx, b.Name, order); err != nil {
-		return fmt.Errorf("failed to finalize order: %w", err)
+	if !finalized {
+		if err = or.finalizeHubOrders(ctx, b.Name, order); err != nil {
+			return fmt.Errorf("failed to finalize order: %w", err)
+		}
 	}
 
 	orderAmount, err := sdk.ParseCoinNormalized(order.Amount)
@@ -583,10 +587,9 @@ func (or *orderTracker) finalizeHubOrders(ctx context.Context, ownerName string,
 	msgs := make([]sdk.Msg, len(orders))
 
 	for i, order := range orders {
-		msgs[i] = &types.MsgFinalizeRollappPacketsByReceiver{
+		msgs[i] = &types.MsgFinalizePacketByPacketKey{
 			Sender:    order.Fulfiller,
-			RollappId: order.RollappID,
-			Receiver:  order.Fulfiller,
+			PacketKey: order.PacketKey,
 		}
 	}
 

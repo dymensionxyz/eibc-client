@@ -13,6 +13,7 @@ type Order struct {
 	Amount                  string
 	Fee                     string
 	RollappID               string
+	PacketKey               string
 	FulfilledHeight         uint64
 	BlockHeight             int64
 	ExpectedFinalizedHeight uint64
