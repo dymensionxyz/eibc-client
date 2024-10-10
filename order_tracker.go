@@ -9,22 +9,21 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
-	"github.com/pkg/errors"
-	rpcclient "github.com/tendermint/tendermint/rpc/client"
 	tmtypes "github.com/tendermint/tendermint/rpc/core/types"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 
 	"github.com/dymensionxyz/eibc-client/store"
 	"github.com/dymensionxyz/eibc-client/types"
 )
 
 type orderTracker struct {
-	hubClient       rpcclient.Client
-	broadcastTx     broadcastTxFn
-	fullNodeClients []rpcclient.Client
-	store           botStore
-	logger          *zap.Logger
-	bots            map[string]*orderFulfiller
+	getStateInfo   getStateInfoFn
+	broadcastTx    broadcastTxFn
+	fullNodeClient *nodeClient
+	store          botStore
+	logger         *zap.Logger
+	bots           map[string]*orderFulfiller
 
 	fomu            sync.Mutex
 	fulfilledOrders map[string]*demandOrder
@@ -34,7 +33,6 @@ type orderTracker struct {
 	pool orderPool
 
 	batchSize                int
-	disputePeriodInBlocks    int64
 	finalizedCheckerInterval time.Duration
 	fulfillCriteria          *fulfillCriteria
 	fulfilledOrdersCh        chan *orderBatch
@@ -42,10 +40,13 @@ type orderTracker struct {
 }
 
 const (
-	defaultFinalizedCheckerInterval = 20 * time.Second
+	defaultFinalizedCheckerInterval = 10 * time.Minute
 )
 
-type broadcastTxFn func(accName string, msgs ...sdk.Msg) (cosmosclient.Response, error)
+type (
+	broadcastTxFn  func(accName string, msgs ...sdk.Msg) (cosmosclient.Response, error)
+	getStateInfoFn func(ctx context.Context, request *types.QueryGetStateInfoRequest, opts ...grpc.CallOption) (*types.QueryGetStateInfoResponse, error)
+)
 
 type botStore interface {
 	GetOrders(ctx context.Context, opts ...store.OrderOption) ([]*store.Order, error)
@@ -60,29 +61,27 @@ type botStore interface {
 }
 
 func newOrderTracker(
-	hubClient rpcclient.Client,
+	getStateInfo getStateInfoFn,
 	broadcastTx broadcastTxFn,
-	fullNodeClients []rpcclient.Client,
+	fullNodeClient *nodeClient,
 	store botStore,
 	fulfilledOrdersCh chan *orderBatch,
 	bots map[string]*orderFulfiller,
 	subscriberID string,
 	batchSize int,
-	disputePeriodInBlocks int64,
 	fCriteria *fulfillCriteria,
 	ordersCh chan<- []*demandOrder,
 	logger *zap.Logger,
 ) *orderTracker {
 	return &orderTracker{
-		hubClient:                hubClient,
+		getStateInfo:             getStateInfo,
 		broadcastTx:              broadcastTx,
-		fullNodeClients:          fullNodeClients,
+		fullNodeClient:           fullNodeClient,
 		store:                    store,
 		pool:                     orderPool{orders: make(map[string]*demandOrder)},
 		fulfilledOrdersCh:        fulfilledOrdersCh,
 		bots:                     bots,
 		batchSize:                batchSize,
-		disputePeriodInBlocks:    disputePeriodInBlocks,
 		finalizedCheckerInterval: defaultFinalizedCheckerInterval,
 		fulfillCriteria:          fCriteria,
 		validOrdersCh:            make(chan []*demandOrder),
@@ -96,11 +95,6 @@ func newOrderTracker(
 func (or *orderTracker) start(ctx context.Context) error {
 	if err := or.loadTrackedOrders(ctx); err != nil {
 		return fmt.Errorf("failed to load orders: %w", err)
-	}
-
-	// TODO: consider that if the client is offline if might miss finalized orders, and the state might not be updated
-	if err := or.waitForFinalizedOrder(ctx); err != nil {
-		or.logger.Error("failed to wait for finalized order", zap.Error(err))
 	}
 
 	or.selectOrdersWorker(ctx)
@@ -167,7 +161,7 @@ func (or *orderTracker) enqueueValidOrders(ctx context.Context, toCheckOrdersCh 
 
 func (or *orderTracker) getValidAndRetryOrders(ctx context.Context, orders []*demandOrder) (validOrders, invalidOrders []*demandOrder) {
 	for _, order := range orders {
-		valid, err := or.isOrderValid(ctx, order)
+		valid, err := or.fullNodeClient.BlockValidated(ctx, order.blockHeight)
 		if err != nil {
 			or.logger.Error("failed to check validation of block", zap.Error(err))
 			continue
@@ -188,37 +182,6 @@ func (or *orderTracker) getValidAndRetryOrders(ctx context.Context, orders []*de
 		// order is not valid yet, so add it back to the pool
 		invalidOrders = append(invalidOrders, order)
 	}
-	return
-}
-
-func (or *orderTracker) isOrderValid(ctx context.Context, order *demandOrder) (valid bool, _ error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	var numValidated int
-	for _, node := range or.fullNodeClients {
-		block, err := node.Block(ctx, &order.blockHeight)
-		if err != nil || block == nil {
-			// TODO: check for proper error
-			if errors.Is(err, context.DeadlineExceeded) {
-				return
-			}
-			or.logger.Error("failed to get block", zap.Error(err))
-			continue
-		}
-
-		withSettlement := or.fulfillCriteria.FulfillmentMode.Level == fulfillmentModeSettlement
-		settlementValidated := true // block.Block.SettlementValidated // TODO: implement
-
-		if withSettlement {
-			if !settlementValidated {
-				continue
-			}
-		}
-		numValidated++
-	}
-
-	valid = numValidated >= or.fulfillCriteria.FulfillmentMode.MinConfirmations
 	return
 }
 
@@ -425,33 +388,6 @@ func (or *orderTracker) isOrderInPool(id string) bool {
 	return or.pool.hasOrder(id)
 }
 
-const finalizedEvent = "dymensionxyz.dymension.eibc.EventDemandOrderPacketStatusUpdated"
-
-func (or *orderTracker) waitForFinalizedOrder(ctx context.Context) error {
-	// TODO: should filter by fulfiller (one of the bots)?
-	query := fmt.Sprintf("%s.is_fulfilled='true' AND %s.new_packet_status='FINALIZED'", finalizedEvent, finalizedEvent)
-
-	resCh, err := or.hubClient.Subscribe(ctx, or.subscriberID, query)
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to demand orders: %w", err)
-	}
-
-	go func() {
-		for {
-			select {
-			case res := <-resCh:
-				if err := or.finalizeOrders(ctx, res); err != nil {
-					or.logger.Error("failed to finalize order", zap.Error(err))
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	return nil
-}
-
 // finalizeOrders finalizes the orders after the dispute period has passed. It updates the bot's balances and pending rewards.
 func (or *orderTracker) finalizeOrders(ctx context.Context, res tmtypes.ResultEvent) error {
 	ids := res.Events[finalizedEvent+".order_id"]
@@ -470,35 +406,59 @@ func (or *orderTracker) finalizeOrders(ctx context.Context, res tmtypes.ResultEv
 }
 
 func (or *orderTracker) finalizedChecker(ctx context.Context) {
-	if or.disputePeriodInBlocks == 0 {
-		return
-	}
 	ticker := time.NewTicker(or.finalizedCheckerInterval)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := or.checkIfFinalized(ctx); err != nil {
-				or.logger.Error("failed to check if order is finalized", zap.Error(err))
+			for rollappID := range or.fulfillCriteria.MinFeePercentage.Chain {
+				if err := or.checkIfFinalized(ctx, rollappID); err != nil {
+					or.logger.Error("failed to check if order is finalized", zap.Error(err))
+				}
 			}
 		}
 	}
 }
 
-func (or *orderTracker) checkIfFinalized(ctx context.Context) error {
-	disputePeriodInBlocks := or.disputePeriodInBlocks
-	lastBlock, err := or.hubClient.Block(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to get current height: %w", err)
+func (or *orderTracker) checkEventFinalized(ctx context.Context, event tmtypes.ResultEvent) error {
+	rollappIDs := event.Events[stateInfoEvent+".rollapp_id"]
+	if len(rollappIDs) == 0 {
+		return nil
+	}
+	if err := or.checkIfFinalized(ctx, rollappIDs[0]); err != nil {
+		return fmt.Errorf("failed to finalize orders: %w", err)
 	}
 
-	currentHeight := lastBlock.Block.Height
+	return nil
+}
 
+func (or *orderTracker) checkIfFinalized(ctx context.Context, rollappID string) error {
+	resp, err := or.getStateInfo(ctx, &types.QueryGetStateInfoRequest{
+		RollappId: rollappID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get state info: %w", err)
+	}
+
+	if len(resp.StateInfo.BDs.BD) == 0 {
+		return nil
+	}
+
+	latestHeight := resp.StateInfo.BDs.BD[len(resp.StateInfo.BDs.BD)-1].Height
+
+	if err = or.checkIfLastFinalized(ctx, int64(latestHeight)); err != nil {
+		return fmt.Errorf("failed to check if last order is finalized: %w", err)
+	}
+
+	return nil
+}
+
+func (or *orderTracker) checkIfLastFinalized(ctx context.Context, latestHeight int64) error {
 	or.fomu.Lock()
 	var orderIDsToFinalize []string
 	for id, order := range or.fulfilledOrders {
-		if currentHeight >= order.blockHeight+disputePeriodInBlocks {
+		if latestHeight >= order.blockHeight {
 			orderIDsToFinalize = append(orderIDsToFinalize, id)
 		}
 	}

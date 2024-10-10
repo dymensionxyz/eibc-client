@@ -8,13 +8,13 @@ import (
 	"slices"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	rpcclient "github.com/tendermint/tendermint/rpc/client"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 
 	"github.com/dymensionxyz/eibc-client/store"
+	"github.com/dymensionxyz/eibc-client/types"
 )
 
 type orderClient struct {
@@ -69,7 +69,7 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		return nil, fmt.Errorf("failed to create hub client: %w", err)
 	}
 
-	fullNodeClients, err := getFullNodeClients(config)
+	fullNodeClient, err := getFullNodeClients(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create full node clients: %w", err)
 	}
@@ -77,24 +77,31 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	// create bots
 	bots := make(map[string]*orderFulfiller)
 
+	queryClient := types.NewQueryClient(hubClient.Context())
+
 	ordTracker := newOrderTracker(
-		hubClient.RPC,
+		queryClient.StateInfo,
 		hubClient.BroadcastTx,
-		fullNodeClients,
+		fullNodeClient,
 		bstore,
 		fulfilledOrdersCh,
 		bots,
 		subscriberID,
 		config.Bots.MaxOrdersPerTx,
-		config.DisputePeriodInBlocks,
 		&config.FulfillCriteria,
 		orderCh,
 		logger,
 	)
 
+	rollapps := make([]string, 0, len(config.FulfillCriteria.MinFeePercentage.Chain))
+	for chain := range config.FulfillCriteria.MinFeePercentage.Chain {
+		rollapps = append(rollapps, chain)
+	}
+
 	eventer := newOrderEventer(
 		hubClient,
 		subscriberID,
+		rollapps,
 		ordTracker,
 		logger,
 	)
@@ -201,22 +208,28 @@ func getHubClient(config Config) (cosmosclient.Client, error) {
 	return hubClient, nil
 }
 
-func getFullNodeClients(config Config) (clients []rpcclient.Client, err error) {
-	for _, nodeAddress := range config.FulfillCriteria.FulfillmentMode.FullNodes {
-		// init cosmos client for order fetcher
-		clientCfg := clientConfig{
-			nodeAddress: nodeAddress,
-		}
+func getFullNodeClients(config Config) (*nodeClient, error) {
+	var expectedValidationLevel validationLevel
 
-		client, err := cosmosclient.New(getCosmosClientOptions(clientCfg)...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create cosmos client: %w", err)
-		}
-
-		clients = append(clients, client.RPC)
+	switch config.FulfillCriteria.FulfillmentMode.Level {
+	case fulfillmentModeP2P:
+		expectedValidationLevel = validationLevelP2P
+	case fulfillmentModeSettlement:
+		expectedValidationLevel = validationLevelSettlement
+	default:
+		return nil, fmt.Errorf("unknown fulfillment mode: %s", config.FulfillCriteria.FulfillmentMode.Level)
 	}
 
-	return
+	client, err := newNodeClient(
+		config.FulfillCriteria.FulfillmentMode.FullNodes,
+		expectedValidationLevel,
+		config.FulfillCriteria.FulfillmentMode.MinConfirmations,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create full node client: %w", err)
+	}
+
+	return client, nil
 }
 
 func (oc *orderClient) start(ctx context.Context) error {

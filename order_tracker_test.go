@@ -8,7 +8,6 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/stretchr/testify/assert"
-	coretypes "github.com/tendermint/tendermint/rpc/core/types"
 	"go.uber.org/zap"
 )
 
@@ -149,9 +148,8 @@ var (
 func Test_worker_sequencerMode(t *testing.T) {
 	tests := []struct {
 		name             string
-		fullNodeClients  []*mockNodeClient
+		fullNodeClient   *nodeClient
 		fulfillmentLevel fulfillmentLevel
-		minConfirmations int
 		batchSize        int
 		orderDeadline    time.Time
 		orderIDs         []string
@@ -184,25 +182,51 @@ func Test_worker_sequencerMode(t *testing.T) {
 		}, {
 			name:             "fulfill orders in p2p mode",
 			fulfillmentLevel: fulfillmentModeP2P,
-			minConfirmations: 1,
-			fullNodeClients: []*mockNodeClient{{
-				blocks: map[int64]*coretypes.ResultBlock{
-					1: {}, 2: {}, 3: {}, 4: {}, 5: {}, 6: {}, 7: {}, 8: {}, 9: {}, 10: {},
-				},
-			}},
+			fullNodeClient: &nodeClient{
+				minimumValidatedNodes:   1,
+				expectedValidationLevel: validationLevelP2P,
+				locations:               []string{"location1"},
+				get: mockValidGet(map[string]map[int64]*blockValidatedResponse{
+					"location1": {
+						1:  {ValidationLevel: validationLevelP2P},
+						2:  {ValidationLevel: validationLevelP2P},
+						3:  {ValidationLevel: validationLevelP2P},
+						4:  {ValidationLevel: validationLevelP2P},
+						5:  {ValidationLevel: validationLevelP2P},
+						6:  {ValidationLevel: validationLevelP2P},
+						7:  {ValidationLevel: validationLevelP2P},
+						8:  {ValidationLevel: validationLevelP2P},
+						9:  {ValidationLevel: validationLevelP2P},
+						10: {ValidationLevel: validationLevelP2P},
+					},
+				}),
+			},
 			batchSize:        10,
 			orderDeadline:    time.Now().Add(time.Second * 3),
 			orderIDs:         generateOrderIDs(10),
 			expectedOrderIDs: generateOrderIDs(10),
 		}, {
-			name:             "fulfill orders in p2p mode: no blocks 6 and 9",
+			name:             "fulfill orders in p2p mode: invalid blocks 6 and 9",
 			fulfillmentLevel: fulfillmentModeP2P,
-			minConfirmations: 1,
-			fullNodeClients: []*mockNodeClient{{
-				blocks: map[int64]*coretypes.ResultBlock{
-					1: {}, 2: {}, 3: {}, 4: {}, 5: {}, 7: {}, 8: {}, 10: {},
-				},
-			}},
+			fullNodeClient: &nodeClient{
+				minimumValidatedNodes:   1,
+				expectedValidationLevel: validationLevelP2P,
+				locations:               []string{"location1"},
+				get: mockValidGet(map[string]map[int64]*blockValidatedResponse{
+					"location1": {
+						1:  {ValidationLevel: validationLevelP2P},
+						2:  {ValidationLevel: validationLevelP2P},
+						3:  {ValidationLevel: validationLevelP2P},
+						4:  {ValidationLevel: validationLevelP2P},
+						5:  {ValidationLevel: validationLevelP2P},
+						6:  {ValidationLevel: validationLevelNone},
+						7:  {ValidationLevel: validationLevelP2P},
+						8:  {ValidationLevel: validationLevelP2P},
+						9:  {ValidationLevel: validationLevelNone},
+						10: {ValidationLevel: validationLevelP2P},
+					},
+				}),
+			},
 			batchSize:        10,
 			orderDeadline:    time.Now().Add(time.Second * 3),
 			orderIDs:         generateOrderIDs(10),
@@ -210,44 +234,98 @@ func Test_worker_sequencerMode(t *testing.T) {
 		}, {
 			name:             "fulfill orders in p2p mode: 2/3 nodes validated",
 			fulfillmentLevel: fulfillmentModeP2P,
-			minConfirmations: 2,
-			fullNodeClients: []*mockNodeClient{
-				{
-					blocks: map[int64]*coretypes.ResultBlock{
-						1: {}, 2: {}, 3: nil, 4: {}, 5: {}, 6: {}, 7: nil, 8: {}, 9: {}, 10: {},
+			fullNodeClient: &nodeClient{
+				minimumValidatedNodes:   2,
+				expectedValidationLevel: validationLevelP2P,
+				locations:               []string{"location1", "location2", "location3"},
+				get: mockValidGet(map[string]map[int64]*blockValidatedResponse{
+					"location1": {
+						1:  {ValidationLevel: validationLevelP2P},
+						2:  {ValidationLevel: validationLevelP2P},
+						3:  {ValidationLevel: validationLevelNone},
+						4:  {ValidationLevel: validationLevelP2P},
+						5:  {ValidationLevel: validationLevelP2P},
+						6:  {ValidationLevel: validationLevelP2P},
+						7:  {ValidationLevel: validationLevelNone},
+						8:  {ValidationLevel: validationLevelP2P},
+						9:  {ValidationLevel: validationLevelP2P},
+						10: {ValidationLevel: validationLevelP2P},
 					},
-				}, {
-					blocks: map[int64]*coretypes.ResultBlock{
-						1: {}, 2: nil, 3: {}, 4: nil, 5: {}, 6: nil, 7: {}, 8: nil, 9: {}, 10: nil,
+					"location2": {
+						1:  {ValidationLevel: validationLevelP2P},
+						2:  {ValidationLevel: validationLevelNone},
+						3:  {ValidationLevel: validationLevelP2P},
+						4:  {ValidationLevel: validationLevelNone},
+						5:  {ValidationLevel: validationLevelP2P},
+						6:  {ValidationLevel: validationLevelNone},
+						7:  {ValidationLevel: validationLevelP2P},
+						8:  {ValidationLevel: validationLevelNone},
+						9:  {ValidationLevel: validationLevelP2P},
+						10: {ValidationLevel: validationLevelNone},
 					},
-				}, {
-					blocks: map[int64]*coretypes.ResultBlock{
-						1: nil, 2: {}, 3: {}, 4: {}, 5: nil, 6: {}, 7: {}, 8: {}, 9: nil, 10: {},
+					"location3": {
+						1:  {ValidationLevel: validationLevelNone},
+						2:  {ValidationLevel: validationLevelP2P},
+						3:  {ValidationLevel: validationLevelP2P},
+						4:  {ValidationLevel: validationLevelP2P},
+						5:  {ValidationLevel: validationLevelNone},
+						6:  {ValidationLevel: validationLevelP2P},
+						7:  {ValidationLevel: validationLevelP2P},
+						8:  {ValidationLevel: validationLevelP2P},
+						9:  {ValidationLevel: validationLevelNone},
+						10: {ValidationLevel: validationLevelP2P},
 					},
-				},
+				}),
 			},
 			batchSize:        10,
 			orderDeadline:    time.Now().Add(time.Second * 3),
 			orderIDs:         generateOrderIDs(10),
 			expectedOrderIDs: generateOrderIDs(10),
 		}, {
-			name:             "fulfill orders in p2p mode: half orders 2/3 validated, other half 1/3 validated",
-			fulfillmentLevel: fulfillmentModeP2P,
-			minConfirmations: 2,
-			fullNodeClients: []*mockNodeClient{
-				{
-					blocks: map[int64]*coretypes.ResultBlock{
-						1: {}, 2: {}, 3: nil, 4: {}, 5: {}, 6: {}, 7: nil, 8: {}, 9: {}, 10: nil,
+			name:             "fulfill orders in settlement mode: half orders 2/3 validated, other half 1/3 validated",
+			fulfillmentLevel: fulfillmentModeSettlement,
+			fullNodeClient: &nodeClient{
+				minimumValidatedNodes:   2,
+				expectedValidationLevel: validationLevelSettlement,
+				locations:               []string{"location1", "location2", "location3"},
+				get: mockValidGet(map[string]map[int64]*blockValidatedResponse{
+					"location1": {
+						1:  {ValidationLevel: validationLevelSettlement},
+						2:  {ValidationLevel: validationLevelSettlement},
+						3:  {ValidationLevel: validationLevelNone},
+						4:  {ValidationLevel: validationLevelSettlement},
+						5:  {ValidationLevel: validationLevelSettlement},
+						6:  {ValidationLevel: validationLevelSettlement},
+						7:  {ValidationLevel: validationLevelNone},
+						8:  {ValidationLevel: validationLevelSettlement},
+						9:  {ValidationLevel: validationLevelSettlement},
+						10: {ValidationLevel: validationLevelP2P},
 					},
-				}, {
-					blocks: map[int64]*coretypes.ResultBlock{
-						1: {}, 2: nil, 3: {}, 4: nil, 5: {}, 6: nil, 7: nil, 8: nil, 9: nil, 10: nil,
+					"location2": {
+						1:  {ValidationLevel: validationLevelSettlement},
+						2:  {ValidationLevel: validationLevelNone},
+						3:  {ValidationLevel: validationLevelSettlement},
+						4:  {ValidationLevel: validationLevelP2P},
+						5:  {ValidationLevel: validationLevelSettlement},
+						6:  {ValidationLevel: validationLevelNone},
+						7:  {ValidationLevel: validationLevelP2P},
+						8:  {ValidationLevel: validationLevelNone},
+						9:  {ValidationLevel: validationLevelP2P},
+						10: {ValidationLevel: validationLevelNone},
 					},
-				}, {
-					blocks: map[int64]*coretypes.ResultBlock{
-						1: nil, 2: {}, 3: {}, 4: {}, 5: nil, 6: nil, 7: {}, 8: nil, 9: nil, 10: {},
+					"location3": {
+						1:  {ValidationLevel: validationLevelNone},
+						2:  {ValidationLevel: validationLevelSettlement},
+						3:  {ValidationLevel: validationLevelSettlement},
+						4:  {ValidationLevel: validationLevelSettlement},
+						5:  {ValidationLevel: validationLevelNone},
+						6:  {ValidationLevel: validationLevelP2P},
+						7:  {ValidationLevel: validationLevelSettlement},
+						8:  {ValidationLevel: validationLevelNone},
+						9:  {ValidationLevel: validationLevelP2P},
+						10: {ValidationLevel: validationLevelSettlement},
 					},
-				},
+				}),
 			},
 			batchSize:        10,
 			orderDeadline:    time.Now().Add(time.Second * 3),
@@ -256,11 +334,14 @@ func Test_worker_sequencerMode(t *testing.T) {
 		}, {
 			name:             "fulfill orders in p2p mode: orders hit deadline",
 			fulfillmentLevel: fulfillmentModeP2P,
-			minConfirmations: 1,
-			fullNodeClients: []*mockNodeClient{
-				{
-					blocks: map[int64]*coretypes.ResultBlock{},
-				},
+			fullNodeClient: &nodeClient{
+				minimumValidatedNodes:   1,
+				expectedValidationLevel: validationLevelP2P,
+				get: mockValidGet(map[string]map[int64]*blockValidatedResponse{
+					"location1": {
+						1: {ValidationLevel: validationLevelP2P},
+					},
+				}),
 			},
 			batchSize:        10,
 			orderDeadline:    time.Now().Add(-time.Second * 1),
@@ -274,8 +355,7 @@ func Test_worker_sequencerMode(t *testing.T) {
 			fulfillOrderCh := make(chan []*demandOrder)
 
 			ot := &orderTracker{
-				hubClient:       &mockNodeClient{},
-				fullNodeClients: transformFullNodeClients(tt.fullNodeClients),
+				fullNodeClient:  tt.fullNodeClient,
 				store:           &mockStore{},
 				logger:          zap.NewNop(),
 				fulfilledOrders: make(map[string]*demandOrder),
@@ -286,8 +366,7 @@ func Test_worker_sequencerMode(t *testing.T) {
 				fulfillCriteria: &fulfillCriteria{
 					MinFeePercentage: sampleMinFeePercentage,
 					FulfillmentMode: fulfillmentMode{
-						Level:            tt.fulfillmentLevel,
-						MinConfirmations: tt.minConfirmations,
+						Level: tt.fulfillmentLevel,
 					},
 				},
 			}
