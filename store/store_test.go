@@ -75,7 +75,7 @@ func TestBotStore(t *testing.T) {
 			Amount:                  "1000000000000adym",
 			FulfilledHeight:         100,
 			ExpectedFinalizedHeight: 200,
-			Status:                  store.OrderStatusPending,
+			Status:                  store.OrderStatusPendingFinalization,
 		}
 
 		err = s.SaveOrder(ctx, order)
@@ -95,13 +95,13 @@ func TestBotStore(t *testing.T) {
 			Amount:                  "1000000000000adym",
 			FulfilledHeight:         100,
 			ExpectedFinalizedHeight: 200,
-			Status:                  store.OrderStatusFinalized,
+			Status:                  store.OrderStatusFulfilling,
 		}
 
 		err = s.SaveOrder(ctx, order)
 		require.NoError(t, err)
 
-		o, err := s.GetOrders(ctx, store.FilterByStatus(store.OrderStatusFinalized))
+		o, err := s.GetOrders(ctx, store.FilterByStatus(store.OrderStatusFulfilling))
 		require.NoError(t, err)
 		require.Len(t, o, 1)
 		require.Equal(t, order, o[0])
@@ -128,7 +128,7 @@ func TestBotStore(t *testing.T) {
 			Amount:                  "1000000000000adym",
 			FulfilledHeight:         100,
 			ExpectedFinalizedHeight: 200,
-			Status:                  store.OrderStatusPending,
+			Status:                  store.OrderStatusPendingFinalization,
 		}
 
 		err = s.SaveOrder(ctx, order)

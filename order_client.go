@@ -14,6 +14,7 @@ import (
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 
 	"github.com/dymensionxyz/eibc-client/store"
+	"github.com/dymensionxyz/eibc-client/types"
 )
 
 type orderClient struct {
@@ -25,9 +26,15 @@ type orderClient struct {
 	orderEventer *orderEventer
 	orderPoller  *orderPoller
 	orderTracker *orderTracker
+
+	stopCh chan struct{}
 }
 
 func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
+	if config.FulfillCriteria.FulfillmentMode.MinConfirmations > len(config.FulfillCriteria.FulfillmentMode.FullNodes) {
+		return nil, fmt.Errorf("min confirmations cannot be greater than the number of full nodes")
+	}
+
 	sdkcfg := sdk.GetConfig()
 	sdkcfg.SetBech32PrefixForAccount(hubAddressPrefix, pubKeyPrefix)
 
@@ -44,20 +51,6 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		return nil, fmt.Errorf("failed to parse minimum gas balance: %w", err)
 	}
 
-	// init cosmos client for order fetcher
-	fetcherClientCfg := clientConfig{
-		homeDir:        config.Bots.KeyringDir,
-		nodeAddress:    config.NodeAddress,
-		gasFees:        config.Gas.Fees,
-		gasPrices:      config.Gas.Prices,
-		keyringBackend: config.Bots.KeyringBackend,
-	}
-
-	fetcherCosmosClient, err := cosmosclient.New(getCosmosClientOptions(fetcherClientCfg)...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create cosmos client: %w", err)
-	}
-
 	//nolint:gosec
 	subscriberID := fmt.Sprintf("eibc-client-%d", rand.Int())
 
@@ -71,21 +64,45 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	fulfilledOrdersCh := make(chan *orderBatch, newOrderBufferSize) // TODO: make buffer size configurable
 	bstore := store.NewBotStore(db)
 
+	hubClient, err := getHubClient(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create hub client: %w", err)
+	}
+
+	fullNodeClient, err := getFullNodeClients(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create full node clients: %w", err)
+	}
+
+	// create bots
+	bots := make(map[string]*orderFulfiller)
+
+	queryClient := types.NewQueryClient(hubClient.Context())
+
 	ordTracker := newOrderTracker(
-		fetcherCosmosClient,
+		queryClient.StateInfo,
+		hubClient.BroadcastTx,
+		fullNodeClient,
 		bstore,
 		fulfilledOrdersCh,
+		bots,
 		subscriberID,
+		config.Bots.MaxOrdersPerTx,
 		&config.FulfillCriteria,
+		orderCh,
 		logger,
 	)
 
+	rollapps := make([]string, 0, len(config.FulfillCriteria.MinFeePercentage.Chain))
+	for chain := range config.FulfillCriteria.MinFeePercentage.Chain {
+		rollapps = append(rollapps, chain)
+	}
+
 	eventer := newOrderEventer(
-		fetcherCosmosClient,
+		hubClient,
 		subscriberID,
-		ordTracker.canFulfillOrder,
-		config.Bots.MaxOrdersPerTx,
-		orderCh,
+		rollapps,
+		ordTracker,
 		logger,
 	)
 
@@ -93,7 +110,6 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 	slackClient := newSlacker(config.SlackConfig, logger)
 
 	whaleSvc, err := buildWhale(
-		ctx,
 		logger,
 		config.Whale,
 		slackClient,
@@ -115,18 +131,14 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		gasPrices:      config.Gas.Prices,
 	}
 
-	accs, err := addBotAccounts(ctx, config.Bots.NumberOfBots, botClientCfg, logger)
+	accs, err := addBotAccounts(config.Bots.NumberOfBots, botClientCfg, logger)
 	if err != nil {
 		return nil, err
 	}
 
-	// create bots
-	bots := make(map[string]*orderFulfiller)
-
 	var botIdx int
 	for botIdx = range config.Bots.NumberOfBots {
 		b, err := buildBot(
-			ctx,
 			accs[botIdx],
 			logger,
 			config.Bots,
@@ -140,7 +152,7 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create bot: %w", err)
 		}
-		bots[b.accountSvc.accountName] = b
+		bots[b.accountSvc.getAccountName()] = b
 	}
 
 	if !config.SkipRefund {
@@ -163,20 +175,61 @@ func newOrderClient(ctx context.Context, config Config) (*orderClient, error) {
 		whale:        whaleSvc,
 		config:       config,
 		logger:       logger,
+		stopCh:       make(chan struct{}),
 	}
 
 	if config.OrderPolling.Enabled {
 		oc.orderPoller = newOrderPoller(
-			fetcherCosmosClient,
-			ordTracker.canFulfillOrder,
+			hubClient.Context().ChainID,
+			ordTracker,
 			config.OrderPolling,
-			config.Bots.MaxOrdersPerTx,
-			orderCh,
 			logger,
 		)
 	}
 
 	return oc, nil
+}
+
+func getHubClient(config Config) (cosmosclient.Client, error) {
+	// init cosmos client for order fetcher
+	hubClientCfg := clientConfig{
+		homeDir:        config.Bots.KeyringDir,
+		nodeAddress:    config.NodeAddress,
+		gasFees:        config.Gas.Fees,
+		gasPrices:      config.Gas.Prices,
+		keyringBackend: config.Bots.KeyringBackend,
+	}
+
+	hubClient, err := cosmosclient.New(getCosmosClientOptions(hubClientCfg)...)
+	if err != nil {
+		return cosmosclient.Client{}, fmt.Errorf("failed to create cosmos client: %w", err)
+	}
+
+	return hubClient, nil
+}
+
+func getFullNodeClients(config Config) (*nodeClient, error) {
+	var expectedValidationLevel validationLevel
+
+	switch config.FulfillCriteria.FulfillmentMode.Level {
+	case fulfillmentModeP2P:
+		expectedValidationLevel = validationLevelP2P
+	case fulfillmentModeSettlement:
+		expectedValidationLevel = validationLevelSettlement
+	default:
+		return nil, fmt.Errorf("unknown fulfillment mode: %s", config.FulfillCriteria.FulfillmentMode.Level)
+	}
+
+	client, err := newNodeClient(
+		config.FulfillCriteria.FulfillmentMode.FullNodes,
+		expectedValidationLevel,
+		config.FulfillCriteria.FulfillmentMode.MinConfirmations,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create full node client: %w", err)
+	}
+
+	return client, nil
 }
 
 func (oc *orderClient) start(ctx context.Context) error {
@@ -213,12 +266,16 @@ func (oc *orderClient) start(ctx context.Context) error {
 	}
 
 	// TODO: block more nicely
-	<-make(chan struct{})
+	<-oc.stopCh
 
 	return nil
 }
 
-func addBotAccounts(ctx context.Context, numBots int, botConfig clientConfig, logger *zap.Logger) ([]string, error) {
+func (oc *orderClient) stop() {
+	close(oc.stopCh)
+}
+
+func addBotAccounts(numBots int, botConfig clientConfig, logger *zap.Logger) ([]string, error) {
 	cosmosClient, err := cosmosclient.New(getCosmosClientOptions(botConfig)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cosmos client for bot: %w", err)
@@ -255,7 +312,7 @@ func refundFromExtraBotsToWhale(
 	config Config,
 	startBotIdx int,
 	accs []string,
-	whaleAccSvc *accountService,
+	whaleAccSvc accountSvc,
 	gasFeesStr string,
 	logger *zap.Logger,
 ) {
@@ -280,7 +337,6 @@ func refundFromExtraBotsToWhale(
 	// return funds from extra bots to whale
 	for ; startBotIdx < len(accs); startBotIdx++ {
 		b, err := buildBot(
-			ctx,
 			accs[startBotIdx],
 			logger,
 			config.Bots,
@@ -298,27 +354,27 @@ func refundFromExtraBotsToWhale(
 			continue
 		}
 
-		if b.accountSvc.balances.IsZero() {
+		if b.accountSvc.getBalances().IsZero() {
 			continue
 		}
 
 		// if bot doesn't have enough DYM to pay the fees
 		// transfer some from the whale
 		if diff := gasFees.Amount.Sub(b.accountSvc.balanceOf(gasFees.Denom)); diff.IsPositive() {
-			logger.Info("topping up bot account", zap.String("bot", b.accountSvc.accountName),
+			logger.Info("topping up bot account", zap.String("bot", b.accountSvc.getAccountName()),
 				zap.String("denom", gasFees.Denom), zap.String("amount", diff.String()))
 			topUp := sdk.NewCoin(gasFees.Denom, diff)
-			if err := whaleAccSvc.sendCoins(sdk.NewCoins(topUp), b.accountSvc.address()); err != nil {
+			if err := whaleAccSvc.sendCoins(ctx, sdk.NewCoins(topUp), b.accountSvc.address()); err != nil {
 				logger.Error("failed to top up bot account with gas", zap.Error(err))
 				continue
 			}
 			// update bot balance with topped up gas amount
-			b.accountSvc.balances = b.accountSvc.balances.Add(topUp)
+			b.accountSvc.setBalances(b.accountSvc.getBalances().Add(topUp))
 		}
 		// subtract gas fees from bot balance, so there is enough to pay for the fees
-		b.accountSvc.balances = b.accountSvc.balances.Sub(gasFees)
+		b.accountSvc.setBalances(b.accountSvc.getBalances().Sub(gasFees))
 
-		if err = b.accountSvc.sendCoins(b.accountSvc.balances, whaleAccSvc.address()); err != nil {
+		if err = b.accountSvc.sendCoins(ctx, b.accountSvc.getBalances(), whaleAccSvc.address()); err != nil {
 			logger.Error("failed to return funds to whale", zap.Error(err))
 			continue
 		}
@@ -328,7 +384,7 @@ func refundFromExtraBotsToWhale(
 			continue
 		}
 
-		refunded = refunded.Add(b.accountSvc.balances...)
+		refunded = refunded.Add(b.accountSvc.getBalances()...)
 	}
 
 	if !refunded.Empty() {

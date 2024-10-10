@@ -55,6 +55,14 @@ type whaleConfig struct {
 
 type fulfillCriteria struct {
 	MinFeePercentage minFeePercentage `mapstructure:"min_fee_percentage"`
+	FulfillmentMode  fulfillmentMode  `mapstructure:"fulfillment_mode"`
+}
+
+type fulfillmentMode struct {
+	Level              fulfillmentLevel `mapstructure:"level"`
+	FullNodes          []string         `mapstructure:"full_nodes"`
+	MinConfirmations   int              `mapstructure:"min_confirmations"`
+	ValidationWaitTime time.Duration    `mapstructure:"validation_wait_time"`
 }
 
 type minFeePercentage struct {
@@ -88,6 +96,18 @@ const (
 	defaultMaxOrdersPerTx       = 10
 	defaultOrderRefreshInterval = 30 * time.Second
 )
+
+type fulfillmentLevel string
+
+const (
+	fulfillmentModeSequencer  fulfillmentLevel = "sequencer"
+	fulfillmentModeP2P                         = "p2p"
+	fulfillmentModeSettlement                  = "settlement"
+)
+
+func (f fulfillmentLevel) validate() bool {
+	return f == fulfillmentModeSequencer || f == fulfillmentModeP2P || f == fulfillmentModeSettlement
+}
 
 var defaultBalanceThresholds = map[string]string{defaultHubDenom: "1000000000000"}
 
@@ -152,6 +172,7 @@ func getCosmosClientOptions(config clientConfig) []cosmosclient.Option {
 		cosmosclient.WithHome(config.homeDir),
 		cosmosclient.WithNodeAddress(config.nodeAddress),
 		cosmosclient.WithFees(config.gasFees),
+		cosmosclient.WithGas(cosmosclient.GasAuto),
 		cosmosclient.WithGasPrices(config.gasPrices),
 		cosmosclient.WithKeyringBackend(config.keyringBackend),
 		cosmosclient.WithKeyringDir(config.homeDir),

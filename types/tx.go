@@ -2,6 +2,7 @@ package types
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 
 	errorsmod "cosmossdk.io/errors"
@@ -12,7 +13,7 @@ import (
 
 var (
 	_ = sdk.Msg(&MsgFulfillOrder{})
-	_ = sdk.Msg(&MsgUpdateDemandOrder{})
+	_ = sdk.Msg(&MsgFinalizePacketByPacketKey{})
 )
 
 func NewMsgFulfillOrder(fulfillerAddress, orderId, expectedFee string) *MsgFulfillOrder {
@@ -60,35 +61,6 @@ func (m *MsgFulfillOrder) GetFulfillerBech32Address() []byte {
 	return sdk.MustAccAddressFromBech32(m.FulfillerAddress)
 }
 
-func NewMsgUpdateDemandOrder(ownerAddr, orderId, newFee string) *MsgUpdateDemandOrder {
-	return &MsgUpdateDemandOrder{
-		OrderId:      orderId,
-		OwnerAddress: ownerAddr,
-		NewFee:       newFee,
-	}
-}
-
-func (m *MsgUpdateDemandOrder) GetSigners() []sdk.AccAddress {
-	creator, err := sdk.AccAddressFromBech32(m.OwnerAddress)
-	if err != nil {
-		panic(err)
-	}
-	return []sdk.AccAddress{creator}
-}
-
-func (m *MsgUpdateDemandOrder) ValidateBasic() error {
-	err := validateCommon(m.OrderId, m.OwnerAddress, m.NewFee)
-	if err != nil {
-		return errorsmod.Wrap(sdkerrors.ErrInvalidRequest, err.Error())
-	}
-
-	return nil
-}
-
-func (m *MsgUpdateDemandOrder) GetSignerAddr() sdk.AccAddress {
-	return sdk.MustAccAddressFromBech32(m.OwnerAddress)
-}
-
 func isValidOrderId(orderId string) bool {
 	hashBytes, err := hex.DecodeString(orderId)
 	if err != nil {
@@ -118,4 +90,28 @@ func validateCommon(orderId, address, fee string) error {
 	}
 
 	return nil
+}
+
+func (m MsgFinalizePacketByPacketKey) ValidateBasic() error {
+	_, err := sdk.AccAddressFromBech32(m.Sender)
+	if err != nil {
+		return errors.Join(
+			sdkerrors.ErrInvalidAddress,
+			errorsmod.Wrapf(err, "sender must be a valid bech32 address: %s", m.Sender),
+		)
+	}
+	if len(m.PacketKey) == 0 {
+		return fmt.Errorf("packet key must be non-empty")
+	}
+
+	return nil
+}
+
+func (m MsgFinalizePacketByPacketKey) GetSigners() []sdk.AccAddress {
+	signer, _ := sdk.AccAddressFromBech32(m.Sender)
+	return []sdk.AccAddress{signer}
+}
+
+func (*MsgFinalizePacketByPacketKey) XXX_MessageName() string {
+	return "dymensionxyz.dymension.delayedack.MsgFinalizePacketByPacketKey"
 }

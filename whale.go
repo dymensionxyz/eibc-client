@@ -12,7 +12,7 @@ import (
 )
 
 type whale struct {
-	accountSvc        *accountService
+	accountSvc        accountSvc
 	logger            *zap.Logger
 	topUpCh           <-chan topUpRequest
 	balanceThresholds map[string]sdk.Coin
@@ -29,7 +29,7 @@ type topUpRequest struct {
 }
 
 func newWhale(
-	accountSvc *accountService,
+	accountSvc accountSvc,
 	balanceThresholds map[string]sdk.Coin,
 	logger *zap.Logger,
 	slack *slacker,
@@ -49,7 +49,6 @@ func newWhale(
 }
 
 func buildWhale(
-	ctx context.Context,
 	logger *zap.Logger,
 	config whaleConfig,
 	slack *slacker,
@@ -111,8 +110,8 @@ func (w *whale) start(ctx context.Context) error {
 	}
 
 	w.logger.Info("starting service...",
-		zap.String("account", w.accountSvc.accountName),
-		zap.String("address", w.accountSvc.account.GetAddress().String()),
+		zap.String("account", w.accountSvc.getAccountName()),
+		zap.String("address", w.accountSvc.address()),
 		zap.String("balances", balances.String()))
 
 	go w.topUpBalances(ctx)
@@ -183,7 +182,7 @@ func (w *whale) topUp(ctx context.Context, coins sdk.Coins, toAddr string) []str
 		zap.String("coins", canTopUp.String()),
 	)
 
-	if err = w.accountSvc.sendCoins(canTopUp, toAddr); err != nil {
+	if err = w.accountSvc.sendCoins(ctx, canTopUp, toAddr); err != nil {
 		w.logger.Error("failed to top up account", zap.Error(err))
 		return nil
 	}
@@ -212,7 +211,7 @@ func (w *whale) alertLowBalance(ctx context.Context, coin, balance sdk.Coin) {
 
 	_, err := w.slack.begOnSlack(
 		ctx,
-		w.accountSvc.account.GetAddress().String(),
+		w.accountSvc.address(),
 		coin,
 		balance,
 		w.chainID,

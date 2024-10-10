@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	rpcclient "github.com/tendermint/tendermint/rpc/client"
 	tmtypes "github.com/tendermint/tendermint/rpc/core/types"
 	"go.uber.org/zap"
 
@@ -12,35 +15,40 @@ import (
 )
 
 type orderEventer struct {
-	client cosmosclient.Client
-	logger *zap.Logger
+	rpc         rpcclient.Client
+	rollapps    []string
+	eventClient rpcclient.EventsClient
+	logger      *zap.Logger
 
-	batchSize       int
-	newOrders       chan []*demandOrder
-	canFulfillOrder func(*demandOrder) bool
-	subscriberID    string
+	orderTracker *orderTracker
+	subscriberID string
 }
 
 func newOrderEventer(
 	client cosmosclient.Client,
 	subscriberID string,
-	canFulfillOrder func(*demandOrder) bool,
-	batchSize int,
-	newOrders chan []*demandOrder,
+	rollapps []string,
+	orderTracker *orderTracker,
 	logger *zap.Logger,
 ) *orderEventer {
 	return &orderEventer{
-		client:          client,
-		subscriberID:    subscriberID,
-		batchSize:       batchSize,
-		logger:          logger.With(zap.String("module", "order-eventer")),
-		newOrders:       newOrders,
-		canFulfillOrder: canFulfillOrder,
+		rpc:          client.RPC,
+		eventClient:  client.WSEvents,
+		subscriberID: subscriberID,
+		rollapps:     rollapps,
+		logger:       logger.With(zap.String("module", "order-eventer")),
+		orderTracker: orderTracker,
 	}
 }
 
+const (
+	createdEvent   = "dymensionxyz.dymension.eibc.EventDemandOrderCreated"
+	finalizedEvent = "dymensionxyz.dymension.eibc.EventDemandOrderPacketStatusUpdated"
+	stateInfoEvent = "state_update"
+)
+
 func (e *orderEventer) start(ctx context.Context) error {
-	if err := e.client.RPC.Start(); err != nil {
+	if err := e.rpc.Start(); err != nil {
 		return fmt.Errorf("start rpc client: %w", err)
 	}
 
@@ -48,11 +56,25 @@ func (e *orderEventer) start(ctx context.Context) error {
 		return fmt.Errorf("failed to subscribe to pending demand orders: %w", err)
 	}
 
+	// TODO: consider that if the client is offline if might miss finalized orders, and the state might not be updated
+	if err := e.waitForFinalizedOrder(ctx); err != nil {
+		return fmt.Errorf("failed to wait for finalized orders: %w", err)
+	}
+
+	for _, rollappID := range e.rollapps {
+		if err := e.subscribeToStateUpdates(ctx, rollappID); err != nil {
+			return fmt.Errorf("failed to subscribe to state updates: %w", err)
+		}
+	}
+
 	return nil
 }
 
-func (e *orderEventer) enqueueEventOrders(res tmtypes.ResultEvent) error {
+func (e *orderEventer) enqueueEventOrders(_ context.Context, res tmtypes.ResultEvent) error {
 	newOrders := e.parseOrdersFromEvents(res)
+	if len(newOrders) == 0 {
+		return nil
+	}
 
 	if e.logger.Level() <= zap.DebugLevel {
 		ids := make([]string, 0, len(newOrders))
@@ -64,25 +86,10 @@ func (e *orderEventer) enqueueEventOrders(res tmtypes.ResultEvent) error {
 		e.logger.Info("new demand orders", zap.Int("count", len(newOrders)))
 	}
 
-	batch := make([]*demandOrder, 0, e.batchSize)
-
-	for _, order := range newOrders {
-		batch = append(batch, order)
-
-		if len(batch) >= e.batchSize || len(batch) == len(newOrders) {
-			e.newOrders <- batch
-			batch = make([]*demandOrder, 0, e.batchSize)
-		}
-	}
-
-	if len(batch) == 0 {
-		return nil
-	}
+	e.orderTracker.addOrder(newOrders...)
 
 	return nil
 }
-
-const createdEvent = "dymensionxyz.dymension.eibc.EventDemandOrderCreated"
 
 func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandOrder {
 	ids := res.Events[createdEvent+".order_id"]
@@ -94,7 +101,9 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 	prices := res.Events[createdEvent+".price"]
 	fees := res.Events[createdEvent+".fee"]
 	statuses := res.Events[createdEvent+".packet_status"]
+	packetKeys := res.Events[createdEvent+".packet_key"]
 	rollapps := res.Events[createdEvent+".rollapp_id"]
+	heights := res.Events[createdEvent+".proof_height"]
 	newOrders := make([]*demandOrder, 0, len(ids))
 
 	for i, id := range ids {
@@ -104,23 +113,38 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 			continue
 		}
 
+		if fees[i] == "" {
+			continue
+		}
+
 		fee, err := sdk.ParseCoinsNormalized(fees[i])
 		if err != nil {
 			e.logger.Error("failed to parse fee", zap.Error(err))
 			continue
 		}
 
-		order := &demandOrder{
-			id:        id,
-			denom:     price.GetDenomByIndex(0),
-			amount:    price,
-			fee:       fee,
-			status:    statuses[i],
-			rollappId: rollapps[i],
-			// blockHeight: height,
+		height, err := strconv.ParseInt(heights[i], 10, 64)
+		if err != nil {
+			e.logger.Error("failed to parse block height", zap.Error(err))
+			continue
 		}
 
-		if !e.canFulfillOrder(order) {
+		validationWaitTime := e.orderTracker.fulfillCriteria.FulfillmentMode.ValidationWaitTime
+		validDeadline := time.Now().Add(validationWaitTime)
+
+		order := &demandOrder{
+			id:            id,
+			denom:         fee.GetDenomByIndex(0),
+			amount:        price,
+			fee:           fee,
+			status:        statuses[i],
+			rollappId:     rollapps[i],
+			packetKey:     packetKeys[i],
+			blockHeight:   height,
+			validDeadline: validDeadline,
+		}
+
+		if !e.orderTracker.canFulfillOrder(order) {
 			continue
 		}
 
@@ -131,19 +155,33 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 }
 
 func (e *orderEventer) subscribeToPendingDemandOrders(ctx context.Context) error {
-	const query = createdEvent + ".is_fulfilled='false'"
+	query := fmt.Sprintf("%s.is_fulfilled='false'", createdEvent)
+	return e.subscribeToEvent(ctx, "pending demand", query, e.enqueueEventOrders)
+}
 
-	resCh, err := e.client.WSEvents.Subscribe(ctx, e.subscriberID, query)
+func (e *orderEventer) waitForFinalizedOrder(ctx context.Context) error {
+	// TODO: should filter by fulfiller (one of the bots)?
+	query := fmt.Sprintf("%s.is_fulfilled='true' AND %s.new_packet_status='FINALIZED'", finalizedEvent, finalizedEvent)
+	return e.subscribeToEvent(ctx, "finalized", query, e.orderTracker.finalizeOrders)
+}
+
+func (e *orderEventer) subscribeToStateUpdates(ctx context.Context, rollappID string) error {
+	query := fmt.Sprintf("%s.rollapp_id='%s'", stateInfoEvent, rollappID)
+	return e.subscribeToEvent(ctx, "state update", query, e.orderTracker.checkEventFinalized)
+}
+
+func (e *orderEventer) subscribeToEvent(ctx context.Context, event string, query string, callback func(ctx context.Context, event tmtypes.ResultEvent) error) error {
+	resCh, err := e.eventClient.Subscribe(ctx, e.subscriberID, query)
 	if err != nil {
-		return fmt.Errorf("failed to subscribe to demand orders: %w", err)
+		return fmt.Errorf("failed to subscribe to %s events: %w", event, err)
 	}
 
 	go func() {
 		for {
 			select {
 			case res := <-resCh:
-				if err := e.enqueueEventOrders(res); err != nil {
-					e.logger.Error("failed to enqueue event orders", zap.Error(err))
+				if err := callback(ctx, res); err != nil {
+					e.logger.Error(fmt.Sprintf("failed to process %s event", event), zap.Error(err))
 				}
 			case <-ctx.Done():
 				return

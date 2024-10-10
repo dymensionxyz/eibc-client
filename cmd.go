@@ -74,6 +74,10 @@ var startCmd = &cobra.Command{
 			log.Fatalf("failed to unmarshal config: %v", err)
 		}
 
+		if !config.FulfillCriteria.FulfillmentMode.Level.validate() {
+			log.Fatalf("invalid fulfillment mode: %s", config.FulfillCriteria.FulfillmentMode.Level)
+		}
+
 		log.Printf("using config file: %+v", viper.ConfigFileUsed())
 
 		oc, err := newOrderClient(cmd.Context(), config)
@@ -123,7 +127,7 @@ var balancesCmd = &cobra.Command{
 
 		longestAmountStr := 0
 
-		for _, bal := range oc.whale.accountSvc.balances {
+		for _, bal := range oc.whale.accountSvc.getBalances() {
 			amtStr := formatAmount(bal.Amount.String())
 			if len(amtStr) > longestAmountStr {
 				longestAmountStr = len(amtStr)
@@ -172,7 +176,7 @@ var balancesCmd = &cobra.Command{
 			dividerFunds += "-"
 		}
 
-		totalBalances := sdk.NewCoins(oc.whale.accountSvc.balances...)
+		totalBalances := sdk.NewCoins(oc.whale.accountSvc.getBalances()...)
 		totalPendingRewards := sdk.NewCoins()
 
 		i := 0
@@ -210,14 +214,14 @@ var balancesCmd = &cobra.Command{
 		fmt.Println()
 		fmt.Println("Whale Balances:")
 
-		if !oc.whale.accountSvc.balances.IsZero() {
-			accPref := fmt.Sprintf("Whale | '%s': ", oc.whale.accountSvc.accountName)
+		if !oc.whale.accountSvc.getBalances().IsZero() {
+			accPref := fmt.Sprintf("Whale | '%s': ", oc.whale.accountSvc.getAccountName())
 			printAccountSlot(
-				oc.whale.accountSvc.account.GetAddress().String(),
+				oc.whale.accountSvc.address(),
 				accPref,
 				dividerItem,
 			)
-			printBalances(oc.whale.accountSvc.balances, longestAmountStr, maxDen)
+			printBalances(oc.whale.accountSvc.getBalances(), longestAmountStr, maxDen)
 			fmt.Println()
 		}
 
