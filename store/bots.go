@@ -12,16 +12,18 @@ import (
 )
 
 type Bot struct {
-	Address        string `bson:"_id,omitempty"`
-	Name           string
-	Balances       []string
-	PendingRewards PendingRewards
-	Orders         []*Order
+	Address           string   `bson:"_id,omitempty" json:"address"`
+	Name              string   `json:"name"`
+	Balances          []string `json:"balances"`
+	PendingEarnings   Earnings `json:"pending_earnings"`
+	ClaimableEarnings Earnings `json:"claimable_earnings"`
+	Orders            []*Order `json:"fulfilled_orders,omitempty"`
+	Active            bool     `json:"active"`
 }
 
-type PendingRewards []string
+type Earnings []string
 
-func (pr PendingRewards) ToCoins() sdk.Coins {
+func (pr Earnings) ToCoins() sdk.Coins {
 	coins := sdk.NewCoins()
 	for _, reward := range pr {
 		coin, err := sdk.ParseCoinNormalized(reward)
@@ -55,8 +57,15 @@ func OnlyWithFunds() BotOption {
 	}
 }
 
+func IncludeInactiveBots() BotOption {
+	return func(f *botFilter) {
+		f.includeInactiveBots = true
+	}
+}
+
 type botFilter struct {
 	includePendingOrders bool
+	includeInactiveBots  bool
 	withFunds            bool
 }
 
@@ -101,6 +110,10 @@ func (s *botStore) GetBots(ctx context.Context, opts ...BotOption) ([]*Bot, erro
 		f["balances"] = bson.M{"$exists": true, "$ne": bson.A{}}
 	}
 
+	if !filter.includeInactiveBots {
+		f["active"] = true
+	}
+
 	cursor, err := botsCollection.Find(ctx, f)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get all bots: %w", err)
@@ -120,6 +133,16 @@ func (s *botStore) SaveBot(ctx context.Context, bot *Bot) error {
 	_, err := botsCollection.ReplaceOne(ctx, bson.M{"_id": bot.Address}, bot, &options.ReplaceOptions{Upsert: &upsert})
 	if err != nil {
 		return fmt.Errorf("failed to update bot: %w", err)
+	}
+
+	return nil
+}
+
+func (s *botStore) DeactivateAllBots(ctx context.Context) error {
+	botsCollection := s.Database(botDatabase).Collection(botCollection)
+	_, err := botsCollection.UpdateMany(ctx, bson.M{}, bson.M{"$set": bson.M{"active": false}})
+	if err != nil {
+		return fmt.Errorf("failed to deactivate all bots: %w", err)
 	}
 
 	return nil

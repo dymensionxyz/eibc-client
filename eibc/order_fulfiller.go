@@ -1,4 +1,4 @@
-package main
+package eibc
 
 import (
 	"context"
@@ -10,11 +10,12 @@ import (
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 	"go.uber.org/zap"
 
+	"github.com/dymensionxyz/eibc-client/config"
 	"github.com/dymensionxyz/eibc-client/types"
 )
 
 type orderFulfiller struct {
-	accountSvc          accountSvc
+	accountSvc          AccountSvc
 	client              cosmosClient
 	logger              *zap.Logger
 	FulfillDemandOrders func(demandOrder ...*demandOrder) error
@@ -28,22 +29,22 @@ type cosmosClient interface {
 	Context() client.Context
 }
 
-type accountSvc interface {
-	address() string
-	getAccountName() string
-	getBalances() sdk.Coins
-	setBalances(sdk.Coins)
-	ensureBalances(ctx context.Context, coins sdk.Coins) ([]string, error)
-	sendCoins(ctx context.Context, coins sdk.Coins, toAddrStr string) error
-	getAccountBalances(ctx context.Context) (sdk.Coins, error)
-	updateFunds(ctx context.Context, opts ...fundsOption) error
-	balanceOf(denom string) sdk.Int
-	waitForTx(txHash string) error
-	refreshBalances(ctx context.Context) error
+type AccountSvc interface {
+	Address() string
+	GetAccountName() string
+	GetBalances() sdk.Coins
+	SetBalances(sdk.Coins)
+	EnsureBalances(ctx context.Context, coins sdk.Coins) ([]string, error)
+	SendCoins(ctx context.Context, coins sdk.Coins, toAddrStr string) error
+	GetAccountBalances(ctx context.Context) (sdk.Coins, error)
+	UpdateFunds(ctx context.Context, opts ...fundsOption) error
+	BalanceOf(denom string) sdk.Int
+	WaitForTx(txHash string) error
+	RefreshBalances(ctx context.Context) error
 }
 
 func newOrderFulfiller(
-	accountSvc accountSvc,
+	accountSvc AccountSvc,
 	newOrdersCh chan []*demandOrder,
 	fulfilledOrdersCh chan<- *orderBatch,
 	client cosmosClient,
@@ -54,7 +55,8 @@ func newOrderFulfiller(
 		client:            client,
 		fulfilledOrdersCh: fulfilledOrdersCh,
 		newOrdersCh:       newOrdersCh,
-		logger:            logger.With(zap.String("module", "order-fulfiller"), zap.String("name", accountSvc.getAccountName())),
+		logger: logger.With(zap.String("module", "order-fulfiller"),
+			zap.String("name", accountSvc.GetAccountName()), zap.String("address", accountSvc.Address())),
 	}
 	o.FulfillDemandOrders = o.fulfillDemandOrders
 	return o
@@ -65,15 +67,15 @@ func newOrderFulfiller(
 func buildBot(
 	name string,
 	logger *zap.Logger,
-	config botConfig,
-	clientCfg clientConfig,
+	cfg config.BotConfig,
+	clientCfg config.ClientConfig,
 	store accountStore,
 	minimumGasBalance sdk.Coin,
 	newOrderCh chan []*demandOrder,
 	fulfilledCh chan *orderBatch,
 	topUpCh chan topUpRequest,
 ) (*orderFulfiller, error) {
-	cosmosClient, err := cosmosclient.New(getCosmosClientOptions(clientCfg)...)
+	cosmosClient, err := cosmosclient.New(config.GetCosmosClientOptions(clientCfg)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cosmos client for bot: %s;err: %w", name, err)
 	}
@@ -85,7 +87,7 @@ func buildBot(
 		name,
 		minimumGasBalance,
 		topUpCh,
-		withTopUpFactor(config.TopUpFactor),
+		withTopUpFactor(cfg.TopUpFactor),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create account service for bot: %s;err: %w", name, err)
@@ -95,11 +97,11 @@ func buildBot(
 }
 
 func (ol *orderFulfiller) start(ctx context.Context) error {
-	if err := ol.accountSvc.updateFunds(ctx); err != nil {
+	if err := ol.accountSvc.UpdateFunds(ctx); err != nil {
 		return fmt.Errorf("failed to update account funds: %w", err)
 	}
 
-	ol.logger.Info("starting fulfiller...", zap.String("balances", ol.accountSvc.getBalances().String()))
+	ol.logger.Info("starting fulfiller...", zap.String("balances", ol.accountSvc.GetBalances().String()))
 
 	ol.fulfillOrders(ctx)
 	return nil
@@ -120,7 +122,7 @@ func (ol *orderFulfiller) fulfillOrders(ctx context.Context) {
 
 func (ol *orderFulfiller) processBatch(ctx context.Context, batch []*demandOrder) error {
 	var (
-		rewards, ids []string
+		ids          []string
 		demandOrders []*demandOrder
 	)
 
@@ -133,7 +135,7 @@ func (ol *orderFulfiller) processBatch(ctx context.Context, batch []*demandOrder
 
 	ol.logger.Debug("ensuring balances for orders")
 
-	ensuredDenoms, err := ol.accountSvc.ensureBalances(ctx, coins)
+	ensuredDenoms, err := ol.accountSvc.EnsureBalances(ctx, coins)
 	if err != nil {
 		return fmt.Errorf("failed to ensure balances: %w", err)
 	}
@@ -161,7 +163,7 @@ outer:
 	if len(ids) == 0 {
 		ol.logger.Debug(
 			"no orders to fulfill",
-			zap.String("bot-name", ol.accountSvc.getAccountName()),
+			zap.String("bot-name", ol.accountSvc.GetAccountName()),
 			zap.Int("leftover count", len(leftoverBatch)),
 		)
 		return nil
@@ -180,20 +182,22 @@ outer:
 			return
 		}
 
+		fees := sdk.Coins{}
+
 		for _, order := range batch {
 			if slices.Contains(ids, order.id) {
-				rewards = append(rewards, order.amount.String())
+				fees = fees.Add(order.fee...)
 			}
 		}
 
 		// TODO: check if balances get updated before the new batch starts processing
-		if err := ol.accountSvc.updateFunds(ctx, addRewards(rewards...)); err != nil {
+		if err := ol.accountSvc.UpdateFunds(ctx, addFeeEarnings(fees)); err != nil {
 			ol.logger.Error("failed to refresh balances", zap.Error(err))
 		}
 
 		ol.fulfilledOrdersCh <- &orderBatch{
 			orders:    demandOrders,
-			fulfiller: ol.accountSvc.address(),
+			fulfiller: ol.accountSvc.Address(),
 		}
 	}()
 
@@ -204,17 +208,17 @@ func (ol *orderFulfiller) fulfillDemandOrders(demandOrder ...*demandOrder) error
 	msgs := make([]sdk.Msg, len(demandOrder))
 
 	for i, order := range demandOrder {
-		msgs[i] = types.NewMsgFulfillOrder(ol.accountSvc.address(), order.id, order.feeStr)
+		msgs[i] = types.NewMsgFulfillOrder(ol.accountSvc.Address(), order.id, order.feeStr)
 	}
 
-	rsp, err := ol.client.BroadcastTx(ol.accountSvc.getAccountName(), msgs...)
+	rsp, err := ol.client.BroadcastTx(ol.accountSvc.GetAccountName(), msgs...)
 	if err != nil {
 		return fmt.Errorf("failed to broadcast tx: %w", err)
 	}
 
 	ol.logger.Info("broadcast tx", zap.String("tx-hash", rsp.TxHash))
 
-	if err = ol.accountSvc.waitForTx(rsp.TxHash); err != nil {
+	if err = ol.accountSvc.WaitForTx(rsp.TxHash); err != nil {
 		return fmt.Errorf("failed to wait for tx: %w", err)
 	}
 

@@ -1,4 +1,4 @@
-package main
+package eibc
 
 import (
 	"fmt"
@@ -62,7 +62,7 @@ func fromStoreOrder(order *store.Order) (*demandOrder, error) {
 	if amount.Empty() {
 		return nil, fmt.Errorf("amount is empty")
 	}
-	fee, err := sdk.ParseCoinsNormalized(order.Fee + amount.GetDenomByIndex(0))
+	fee, err := sdk.ParseCoinsNormalized(order.Fee)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse fee: %w", err)
 	}

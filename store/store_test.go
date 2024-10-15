@@ -70,12 +70,10 @@ func TestBotStore(t *testing.T) {
 		s := store.NewBotStore(client)
 		id := "order-1"
 		order := &store.Order{
-			ID:                      id,
-			Fulfiller:               key,
-			Amount:                  "1000000000000adym",
-			FulfilledHeight:         100,
-			ExpectedFinalizedHeight: 200,
-			Status:                  store.OrderStatusPendingFinalization,
+			ID:        id,
+			Fulfiller: key,
+			Amount:    "1000000000000adym",
+			Status:    store.OrderStatusPendingFinalization,
 		}
 
 		err = s.SaveOrder(ctx, order)
@@ -90,12 +88,10 @@ func TestBotStore(t *testing.T) {
 		s := store.NewBotStore(client)
 		id := "order-2"
 		order := &store.Order{
-			ID:                      id,
-			Fulfiller:               key,
-			Amount:                  "1000000000000adym",
-			FulfilledHeight:         100,
-			ExpectedFinalizedHeight: 200,
-			Status:                  store.OrderStatusFulfilling,
+			ID:        id,
+			Fulfiller: key,
+			Amount:    "1000000000000adym",
+			Status:    store.OrderStatusFulfilling,
 		}
 
 		err = s.SaveOrder(ctx, order)
@@ -123,12 +119,10 @@ func TestBotStore(t *testing.T) {
 
 		id := "order-3"
 		order := &store.Order{
-			ID:                      id,
-			Fulfiller:               botKey,
-			Amount:                  "1000000000000adym",
-			FulfilledHeight:         100,
-			ExpectedFinalizedHeight: 200,
-			Status:                  store.OrderStatusPendingFinalization,
+			ID:        id,
+			Fulfiller: botKey,
+			Amount:    "1000000000000adym",
+			Status:    store.OrderStatusPendingFinalization,
 		}
 
 		err = s.SaveOrder(ctx, order)

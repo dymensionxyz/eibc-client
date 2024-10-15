@@ -1,10 +1,11 @@
-package main
+package eibc
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,7 +22,15 @@ type nodeClient struct {
 type getFn func(ctx context.Context, url string) (*blockValidatedResponse, error)
 
 type blockValidatedResponse struct {
-	ValidationLevel validationLevel `json:"validation_level"`
+	Result validationLevel `json:"Result"`
+}
+
+type JSONResponse struct {
+	Jsonrpc string `json:"jsonrpc"`
+	Result  struct {
+		Result string `json:"Result"`
+	} `json:"result"`
+	Id int `json:"id"`
 }
 
 type validationLevel int
@@ -95,7 +104,7 @@ func (c *nodeClient) nodeBlockValidated(ctx context.Context, location string, he
 	if err != nil {
 		return false, err
 	}
-	return validated.ValidationLevel >= c.expectedValidationLevel, nil
+	return validated.Result >= c.expectedValidationLevel, nil
 }
 
 func (c *nodeClient) getHttp(ctx context.Context, url string) (*blockValidatedResponse, error) {
@@ -109,9 +118,17 @@ func (c *nodeClient) getHttp(ctx context.Context, url string) (*blockValidatedRe
 	}
 	defer resp.Body.Close()
 
-	blockValidated := new(blockValidatedResponse)
-	if err := json.NewDecoder(resp.Body).Decode(&blockValidated); err != nil {
+	jsonResp := new(JSONResponse)
+	if err := json.NewDecoder(resp.Body).Decode(&jsonResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	result, err := strconv.ParseInt(jsonResp.Result.Result, 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse result: %w", err)
+	}
+	blockValidated := &blockValidatedResponse{
+		Result: validationLevel(result),
 	}
 	return blockValidated, err
 }

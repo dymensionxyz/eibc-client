@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"fmt"
@@ -11,13 +11,19 @@ import (
 	"github.com/mitchellh/go-homedir"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
-	"github.com/dymensionxyz/eibc-client/cmd/version"
+	"github.com/dymensionxyz/eibc-client/api"
+	"github.com/dymensionxyz/eibc-client/api/handlers"
+	"github.com/dymensionxyz/eibc-client/config"
+	"github.com/dymensionxyz/eibc-client/eibc"
 	"github.com/dymensionxyz/eibc-client/store"
 	utils "github.com/dymensionxyz/eibc-client/utils/viper"
+	"github.com/dymensionxyz/eibc-client/version"
 )
 
-var rootCmd = &cobra.Command{
+var RootCmd = &cobra.Command{
 	Use:   "eibc-client",
 	Short: "eIBC Order client for Dymension Hub",
 	Long:  `Order client for Dymension Hub that scans for demand orders and fulfills them.`,
@@ -36,23 +42,23 @@ var initCmd = &cobra.Command{
 	Short: "Initialize the order client",
 	Long:  `Initialize the order client by generating a config file with default values.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		config := Config{}
-		if err := viper.Unmarshal(&config); err != nil {
+		cfg := config.Config{}
+		if err := viper.Unmarshal(&cfg); err != nil {
 			log.Fatalf("failed to unmarshal config: %v", err)
 		}
 
 		// if home dir doesn't exist, create it
-		if _, err := os.Stat(config.HomeDir); os.IsNotExist(err) {
-			if err := os.MkdirAll(config.HomeDir, 0o755); err != nil {
+		if _, err := os.Stat(cfg.HomeDir); os.IsNotExist(err) {
+			if err := os.MkdirAll(cfg.HomeDir, 0o755); err != nil {
 				log.Fatalf("failed to create home directory: %v", err)
 			}
 		}
 
-		if err := viper.WriteConfigAs(cfgFile); err != nil {
+		if err := viper.WriteConfigAs(config.CfgFile); err != nil {
 			log.Fatalf("failed to write config file: %v", err)
 		}
 
-		fmt.Printf("Config file created: %s\n", cfgFile)
+		fmt.Printf("Config file created: %s\n", config.CfgFile)
 		fmt.Println()
 		fmt.Println("Edit the config file to set the correct values for your environment.")
 	},
@@ -69,31 +75,63 @@ var startCmd = &cobra.Command{
 			fmt.Println("Using config file:", viper.ConfigFileUsed())
 		}
 
-		config := Config{}
-		if err := viper.Unmarshal(&config); err != nil {
+		cfg := config.Config{}
+		if err := viper.Unmarshal(&cfg); err != nil {
 			log.Fatalf("failed to unmarshal config: %v", err)
 		}
 
-		if !config.FulfillCriteria.FulfillmentMode.Level.validate() {
-			log.Fatalf("invalid fulfillment mode: %s", config.FulfillCriteria.FulfillmentMode.Level)
+		if !cfg.FulfillCriteria.FulfillmentMode.Level.Validate() {
+			log.Fatalf("invalid fulfillment mode: %s", cfg.FulfillCriteria.FulfillmentMode.Level)
 		}
 
 		log.Printf("using config file: %+v", viper.ConfigFileUsed())
 
-		oc, err := newOrderClient(cmd.Context(), config)
+		logger, err := buildLogger(cfg.LogLevel)
+		if err != nil {
+			log.Fatalf("failed to build logger: %v", err)
+		}
+
+		// Ensure all logs are written
+		defer logger.Sync() // nolint: errcheck
+
+		oc, err := eibc.NewOrderClient(cmd.Context(), cfg, logger)
 		if err != nil {
 			log.Fatalf("failed to create order client: %v", err)
 		}
 
-		if config.Bots.NumberOfBots == 0 {
+		if cfg.Bots.NumberOfBots == 0 {
 			log.Println("no bots to start")
 			return
 		}
 
-		if err := oc.start(cmd.Context()); err != nil {
+		bh := handlers.NewBotHandler(oc.GetBotStore())
+		wh := handlers.NewWhaleHandler(oc.GetWhale().GetBalanceThresholds(), oc.GetWhale().GetAccountSvc())
+
+		if err := oc.Start(cmd.Context()); err != nil {
 			log.Fatalf("failed to start order client: %v", err)
 		}
+
+		server := api.NewServer(bh, wh, cfg.ServerAddress, logger)
+		server.Start()
 	},
+}
+
+func buildLogger(logLevel string) (*zap.Logger, error) {
+	var level zapcore.Level
+	if err := level.Set(logLevel); err != nil {
+		return nil, fmt.Errorf("failed to set log level: %w", err)
+	}
+
+	encoderConfig := zap.NewProductionEncoderConfig()
+	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+
+	logger := zap.New(zapcore.NewCore(
+		zapcore.NewJSONEncoder(encoderConfig),
+		zapcore.Lock(os.Stdout),
+		level,
+	))
+
+	return logger, nil
 }
 
 var balancesCmd = &cobra.Command{
@@ -107,27 +145,37 @@ var balancesCmd = &cobra.Command{
 			fmt.Println("Using config file:", viper.ConfigFileUsed())
 		}
 
-		config := Config{}
-		if err := viper.Unmarshal(&config); err != nil {
+		cfg := config.Config{}
+		if err := viper.Unmarshal(&cfg); err != nil {
 			log.Fatalf("failed to unmarshal config: %v", err)
 		}
 
-		config.SkipRefund = true
+		cfg.SkipRefund = true
 
-		oc, err := newOrderClient(cmd.Context(), config)
+		logger, err := buildLogger(cfg.LogLevel)
+		if err != nil {
+			log.Fatalf("failed to build logger: %v", err)
+		}
+
+		// Ensure all logs are written
+		defer logger.Sync() // nolint: errcheck
+
+		oc, err := eibc.NewOrderClient(cmd.Context(), cfg, logger)
 		if err != nil {
 			log.Fatalf("failed to create order client: %v", err)
 		}
 
-		defer oc.orderTracker.store.Close()
+		defer oc.Stop()
 
-		if err := oc.whale.accountSvc.refreshBalances(cmd.Context()); err != nil {
+		whaleAccSvc := oc.GetWhale().GetAccountSvc()
+
+		if err := whaleAccSvc.RefreshBalances(cmd.Context()); err != nil {
 			log.Fatalf("failed to refresh whale account balances: %v", err)
 		}
 
 		longestAmountStr := 0
 
-		for _, bal := range oc.whale.accountSvc.getBalances() {
+		for _, bal := range whaleAccSvc.GetBalances() {
 			amtStr := formatAmount(bal.Amount.String())
 			if len(amtStr) > longestAmountStr {
 				longestAmountStr = len(amtStr)
@@ -137,7 +185,7 @@ var balancesCmd = &cobra.Command{
 		fmt.Println()
 		fmt.Println("Bots Funds:")
 
-		bots, err := oc.orderTracker.store.GetBots(cmd.Context(), store.OnlyWithFunds())
+		bots, err := oc.GetBotStore().GetBots(cmd.Context(), store.OnlyWithFunds())
 		if err != nil {
 			log.Fatalf("failed to get bots from db: %v", err)
 		}
@@ -148,7 +196,7 @@ var balancesCmd = &cobra.Command{
 				log.Fatalf("failed to parse balance: %v", err)
 			}
 
-			pendingRewards, err := sdk.ParseCoinsNormalized(strings.Join(b.PendingRewards, ","))
+			pendingRewards, err := sdk.ParseCoinsNormalized(strings.Join(b.PendingEarnings, ","))
 			if err != nil {
 				log.Fatalf("failed to parse pending rewards: %v", err)
 			}
@@ -176,7 +224,7 @@ var balancesCmd = &cobra.Command{
 			dividerFunds += "-"
 		}
 
-		totalBalances := sdk.NewCoins(oc.whale.accountSvc.getBalances()...)
+		totalBalances := sdk.NewCoins(whaleAccSvc.GetBalances()...)
 		totalPendingRewards := sdk.NewCoins()
 
 		i := 0
@@ -188,7 +236,7 @@ var balancesCmd = &cobra.Command{
 				log.Fatalf("failed to parse balance: %v", err)
 			}
 
-			pendingRewards, err := sdk.ParseCoinsNormalized(strings.Join(b.PendingRewards, ","))
+			pendingRewards, err := sdk.ParseCoinsNormalized(strings.Join(b.PendingEarnings, ","))
 			if err != nil {
 				log.Fatalf("failed to parse pending rewards: %v", err)
 			}
@@ -214,14 +262,14 @@ var balancesCmd = &cobra.Command{
 		fmt.Println()
 		fmt.Println("Whale Balances:")
 
-		if !oc.whale.accountSvc.getBalances().IsZero() {
-			accPref := fmt.Sprintf("Whale | '%s': ", oc.whale.accountSvc.getAccountName())
+		if !whaleAccSvc.GetBalances().IsZero() {
+			accPref := fmt.Sprintf("Whale | '%s': ", whaleAccSvc.GetAccountName())
 			printAccountSlot(
-				oc.whale.accountSvc.address(),
+				whaleAccSvc.Address(),
 				accPref,
 				dividerItem,
 			)
-			printBalances(oc.whale.accountSvc.getBalances(), longestAmountStr, maxDen)
+			printBalances(whaleAccSvc.GetBalances(), longestAmountStr, maxDen)
 			fmt.Println()
 		}
 
@@ -254,9 +302,9 @@ var scaleCmd = &cobra.Command{
 		}
 
 		defaultHomeDir := home + "/.eibc-client"
-		cfgFile = defaultHomeDir + "/config.yaml"
+		config.CfgFile = defaultHomeDir + "/config.yaml"
 
-		viper.SetConfigFile(cfgFile)
+		viper.SetConfigFile(config.CfgFile)
 		err = viper.ReadInConfig()
 		if err != nil {
 			return
@@ -271,6 +319,14 @@ var scaleCmd = &cobra.Command{
 			"bot count successfully scaled to %d, please restart the eibc process if it's running\n",
 			newBotCount,
 		)
+	},
+}
+
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Print the version of roller",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println(version.BuildVersion)
 	},
 }
 
@@ -319,24 +375,22 @@ func formatAmount(numStr string) string {
 	return numStr[:len(numStr)-18] + "," + numStr[len(numStr)-18:]
 }
 
-var cfgFile string
-
 func init() {
-	rootCmd.CompletionOptions.DisableDefaultCmd = true
-	rootCmd.AddCommand(initCmd)
-	rootCmd.AddCommand(startCmd)
-	rootCmd.AddCommand(scaleCmd)
+	RootCmd.CompletionOptions.DisableDefaultCmd = true
+	RootCmd.AddCommand(initCmd)
+	RootCmd.AddCommand(startCmd)
+	RootCmd.AddCommand(scaleCmd)
 
 	balancesCmd.Flags().BoolP("all", "a", false, "Filter by fulfillment status")
-	rootCmd.AddCommand(balancesCmd)
+	RootCmd.AddCommand(balancesCmd)
 
-	rootCmd.AddCommand(version.Cmd())
+	RootCmd.AddCommand(versionCmd)
 
-	cobra.OnInitialize(initConfig)
+	cobra.OnInitialize(config.InitConfig)
 
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file")
+	RootCmd.PersistentFlags().StringVar(&config.CfgFile, "config", "", "config file")
 
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
-	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	RootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }

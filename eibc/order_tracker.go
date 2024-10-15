@@ -1,4 +1,4 @@
-package main
+package eibc
 
 import (
 	"context"
@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
+	"github.com/dymensionxyz/eibc-client/config"
 	"github.com/dymensionxyz/eibc-client/store"
 	"github.com/dymensionxyz/eibc-client/types"
 )
@@ -34,7 +35,7 @@ type orderTracker struct {
 
 	batchSize                int
 	finalizedCheckerInterval time.Duration
-	fulfillCriteria          *fulfillCriteria
+	fulfillCriteria          *config.FulfillCriteria
 	fulfilledOrdersCh        chan *orderBatch
 	subscriberID             string
 }
@@ -69,7 +70,7 @@ func newOrderTracker(
 	bots map[string]*orderFulfiller,
 	subscriberID string,
 	batchSize int,
-	fCriteria *fulfillCriteria,
+	fCriteria *config.FulfillCriteria,
 	ordersCh chan<- []*demandOrder,
 	logger *zap.Logger,
 ) *orderTracker {
@@ -133,7 +134,7 @@ func (or *orderTracker) pullOrders(ctx context.Context, toCheckOrdersCh chan []*
 			}
 			// in "sequencer" mode send the orders directly to be fulfilled,
 			// in other modes, send the orders to be checked for validity
-			if or.fulfillCriteria.FulfillmentMode.Level == fulfillmentModeSequencer {
+			if or.fulfillCriteria.FulfillmentMode.Level == config.FulfillmentModeSequencer {
 				or.outputOrdersCh <- orders
 			} else {
 				toCheckOrdersCh <- orders
@@ -193,7 +194,7 @@ func (or *orderTracker) addOrder(orders ...*demandOrder) {
 	// - in mode "sequencer" we send a batch directly to be fulfilled,
 	// and any orders that overflow the batch are added to the pool
 	// - in mode "p2p" and "settlement" all orders are added to the pool
-	if or.fulfillCriteria.FulfillmentMode.Level == fulfillmentModeSequencer {
+	if or.fulfillCriteria.FulfillmentMode.Level == config.FulfillmentModeSequencer {
 		var (
 			batchToSend []*demandOrder
 			batchToPool []*demandOrder
@@ -235,7 +236,7 @@ func (or *orderTracker) syncStore(ctx context.Context) {
 			toSaveOrders[i] = &store.Order{
 				ID:            o.id,
 				Amount:        o.amount.String(),
-				Fee:           o.feeStr,
+				Fee:           o.fee.String(),
 				RollappID:     o.rollappId,
 				PacketKey:     o.packetKey,
 				BlockHeight:   o.blockHeight,
@@ -327,7 +328,7 @@ func (or *orderTracker) addFulfilledOrders(ctx context.Context, batch *orderBatc
 			ID:            order.id,
 			Fulfiller:     batch.fulfiller,
 			Amount:        order.amount[0].String(),
-			Fee:           order.feeStr,
+			Fee:           order.fee.String(),
 			RollappID:     order.rollappId,
 			PacketKey:     order.packetKey,
 			BlockHeight:   order.blockHeight,
@@ -503,22 +504,42 @@ func (or *orderTracker) finalizeOrderWithID(ctx context.Context, id string, fina
 		return fmt.Errorf("failed to parse order amount: %w", err)
 	}
 
-	pendingRewards, err := sdk.ParseCoinsNormalized(strings.Join(b.PendingRewards, ","))
+	fee, err := sdk.ParseCoinNormalized(order.Fee)
 	if err != nil {
-		return fmt.Errorf("failed to parse pending rewards: %w", err)
+		return fmt.Errorf("failed to parse order fee: %w", err)
 	}
 
+	// earnings from fees
+	pendingEarnings, err := sdk.ParseCoinsNormalized(strings.Join(b.PendingEarnings, ","))
+	if err != nil {
+		return fmt.Errorf("failed to parse pending fees: %w", err)
+	}
+
+	// got balances
 	balances, err := sdk.ParseCoinsNormalized(strings.Join(b.Balances, ","))
 	if err != nil {
 		return fmt.Errorf("failed to parse balances: %w", err)
 	}
 
-	if pendingRewards.IsAnyGTE(sdk.NewCoins(orderAmount)) {
-		pendingRewards = pendingRewards.Sub(orderAmount)
+	// fees turn profits after finalization
+	claimableEarnings, err := sdk.ParseCoinsNormalized(strings.Join(b.ClaimableEarnings, ","))
+	if err != nil {
+		return fmt.Errorf("failed to parse claimable earnings: %w", err)
+	}
+
+	if pendingEarnings.IsAnyGTE(sdk.NewCoins(fee)) {
+		// subtract the order fee from the pending earnings
+		pendingEarnings = pendingEarnings.Sub(fee)
+		b.PendingEarnings = store.CoinsToStrings(pendingEarnings)
+
+		// add the order fee to the claimable earnings
+		claimableEarnings = claimableEarnings.Add(fee)
+		b.ClaimableEarnings = store.CoinsToStrings(claimableEarnings)
+
+		// add the order amount back to the balances
 		balances = balances.Add(orderAmount)
-		b.PendingRewards = store.CoinsToStrings(pendingRewards)
 		b.Balances = store.CoinsToStrings(balances)
-		or.bots[b.Name].accountSvc.setBalances(balances)
+		or.bots[b.Name].accountSvc.SetBalances(balances)
 	}
 
 	if err := or.store.SaveBot(ctx, b); err != nil {
@@ -539,7 +560,7 @@ func (or *orderTracker) finalizeOrderWithID(ctx context.Context, id string, fina
 func (or *orderTracker) finalizeHubOrders(ctx context.Context, ownerName string, orders ...*store.Order) error {
 	asvc := or.bots[ownerName].accountSvc
 	// ensure fees
-	_, err := asvc.ensureBalances(ctx, sdk.Coins{})
+	_, err := asvc.EnsureBalances(ctx, sdk.Coins{})
 	if err != nil {
 		return fmt.Errorf("failed to ensure balances: %w", err)
 	}
@@ -558,7 +579,7 @@ func (or *orderTracker) finalizeHubOrders(ctx context.Context, ownerName string,
 		return fmt.Errorf("failed to broadcast tx: %w", err)
 	}
 
-	if err = asvc.waitForTx(rsp.TxHash); err != nil {
+	if err = asvc.WaitForTx(rsp.TxHash); err != nil {
 		return fmt.Errorf("failed to wait for tx: %w", err)
 	}
 

@@ -8,17 +8,15 @@ import (
 )
 
 type Order struct {
-	ID                      string `bson:"_id,omitempty"`
-	Fulfiller               string
-	Amount                  string
-	Fee                     string
-	RollappID               string
-	PacketKey               string
-	FulfilledHeight         uint64
-	BlockHeight             int64
-	ExpectedFinalizedHeight uint64
-	Status                  OrderStatus
-	ValidDeadline           int64
+	ID            string `bson:"_id,omitempty"`
+	Fulfiller     string
+	Amount        string
+	Fee           string
+	RollappID     string
+	PacketKey     string
+	BlockHeight   int64
+	Status        OrderStatus
+	ValidDeadline int64
 }
 
 type OrderStatus string

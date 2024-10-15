@@ -1,4 +1,4 @@
-package main
+package eibc
 
 import (
 	"context"
@@ -13,6 +13,8 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"go.uber.org/zap"
+
+	"github.com/dymensionxyz/eibc-client/config"
 )
 
 type orderPoller struct {
@@ -31,7 +33,7 @@ type orderPoller struct {
 func newOrderPoller(
 	chainID string,
 	orderTracker *orderTracker,
-	pollingCfg OrderPollingConfig,
+	pollingCfg config.OrderPollingConfig,
 	logger *zap.Logger,
 ) *orderPoller {
 	o := &orderPoller{

@@ -1,4 +1,4 @@
-package main
+package eibc
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/slack-go/slack"
 	"go.uber.org/zap"
+
+	"github.com/dymensionxyz/eibc-client/config"
 )
 
 type slacker struct {
@@ -17,7 +19,7 @@ type slacker struct {
 	logger        *zap.Logger
 }
 
-func newSlacker(config slackConfig, logger *zap.Logger) *slacker {
+func newSlacker(config config.SlackConfig, logger *zap.Logger) *slacker {
 	return &slacker{
 		Client:    slack.New(config.AppToken),
 		channelID: config.ChannelID,
@@ -40,7 +42,7 @@ func (oc *slacker) begOnSlack(
 	oc.logger.With(
 		zap.String("amount", coin.String()),
 		zap.String("balance", balance.String()),
-		zap.String("address", address),
+		zap.String("Address", address),
 	).Debug("Slack post @poor-bots")
 
 	message := fmt.Sprintf("Please sir, send %s to my account %s. I'm on chain '%s', on node %s and I only have %s.",

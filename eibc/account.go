@@ -1,4 +1,4 @@
-package main
+package eibc
 
 import (
 	"context"
@@ -20,6 +20,7 @@ import (
 
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 
+	"github.com/dymensionxyz/eibc-client/config"
 	"github.com/dymensionxyz/eibc-client/store"
 )
 
@@ -106,7 +107,7 @@ func getBotAccounts(client cosmosclient.Client) (accs []string, err error) {
 	}
 
 	for _, acc := range accounts {
-		if !strings.HasPrefix(acc.Name, botNamePrefix) {
+		if !strings.HasPrefix(acc.Name, config.BotNamePrefix) {
 			continue
 		}
 		accs = append(accs, acc.Name)
@@ -138,7 +139,7 @@ func listAccounts(client cosmosclient.Client) ([]account, error) {
 
 func createBotAccounts(client cosmosclient.Client, count int) (names []string, err error) {
 	for range count {
-		botName := fmt.Sprintf("%s%s", botNamePrefix, uuid.New().String()[0:5])
+		botName := fmt.Sprintf("%s%s", config.BotNamePrefix, uuid.New().String()[0:5])
 		if err = addAccount(client, botName); err != nil {
 			err = fmt.Errorf("failed to create account: %w", err)
 			return
@@ -166,11 +167,11 @@ func (a *accountService) setupAccount() error {
 	return nil
 }
 
-func (a *accountService) ensureBalances(ctx context.Context, coins sdk.Coins) ([]string, error) {
+func (a *accountService) EnsureBalances(ctx context.Context, coins sdk.Coins) ([]string, error) {
 	// check if gas balance is below minimum
 	gasDiff := math.NewInt(0)
 	if !a.minimumGasBalance.IsNil() && a.minimumGasBalance.IsPositive() {
-		gasBalance := a.balanceOf(a.minimumGasBalance.Denom)
+		gasBalance := a.BalanceOf(a.minimumGasBalance.Denom)
 		gasDiff = a.minimumGasBalance.Amount.Sub(gasBalance)
 	}
 
@@ -183,7 +184,7 @@ func (a *accountService) ensureBalances(ctx context.Context, coins sdk.Coins) ([
 
 	// check if balance is below required
 	for _, coin := range coins {
-		balance := a.balanceOf(coin.Denom)
+		balance := a.BalanceOf(coin.Denom)
 		diff := coin.Amount.Sub(balance)
 		if diff.IsPositive() {
 			// add x times the coin amount to the top up
@@ -215,12 +216,12 @@ func (a *accountService) ensureBalances(ctx context.Context, coins sdk.Coins) ([
 	a.logger.Debug("topped up denoms", zap.Strings("denoms", res))
 	close(resCh)
 
-	if err := a.refreshBalances(ctx); err != nil {
+	if err := a.RefreshBalances(ctx); err != nil {
 		return nil, fmt.Errorf("failed to refresh account balances: %w", err)
 	}
 
 	for _, coin := range coins {
-		balance := a.balanceOf(coin.Denom)
+		balance := a.BalanceOf(coin.Denom)
 		if balance.GTE(coin.Amount) {
 			fundedDenoms = append(fundedDenoms, coin.Denom)
 		}
@@ -229,7 +230,7 @@ func (a *accountService) ensureBalances(ctx context.Context, coins sdk.Coins) ([
 	return fundedDenoms, nil
 }
 
-func (a *accountService) sendCoins(ctx context.Context, coins sdk.Coins, toAddrStr string) error {
+func (a *accountService) SendCoins(ctx context.Context, coins sdk.Coins, toAddrStr string) error {
 	toAddr, err := sdk.AccAddressFromBech32(toAddrStr)
 	if err != nil {
 		return fmt.Errorf("failed to parse address: %w", err)
@@ -247,11 +248,11 @@ func (a *accountService) sendCoins(ctx context.Context, coins sdk.Coins, toAddrS
 		return fmt.Errorf("failed to broadcast tx: %w", err)
 	}
 
-	if err = a.waitForTx(rsp.TxHash); err != nil {
+	if err = a.WaitForTx(rsp.TxHash); err != nil {
 		return fmt.Errorf("failed to wait for tx: %w", err)
 	}
 
-	if err := a.refreshBalances(ctx); err != nil {
+	if err := a.RefreshBalances(ctx); err != nil {
 		a.logger.Error("failed to refresh account balances", zap.Error(err))
 	}
 
@@ -260,7 +261,7 @@ func (a *accountService) sendCoins(ctx context.Context, coins sdk.Coins, toAddrS
 	return nil
 }
 
-func (a *accountService) waitForTx(txHash string) error {
+func (a *accountService) WaitForTx(txHash string) error {
 	if a.asyncClient {
 		return nil
 	}
@@ -291,7 +292,7 @@ func (a *accountService) waitForTx(txHash string) error {
 	}
 }
 
-func (a *accountService) balanceOf(denom string) sdk.Int {
+func (a *accountService) BalanceOf(denom string) sdk.Int {
 	if a.balances == nil {
 		return sdk.ZeroInt()
 	}
@@ -301,17 +302,17 @@ func (a *accountService) balanceOf(denom string) sdk.Int {
 type fundsOption func(*fundsRequest)
 
 type fundsRequest struct {
-	rewards []string
+	fees sdk.Coins
 }
 
-func addRewards(rewards ...string) fundsOption {
+func addFeeEarnings(rewards sdk.Coins) fundsOption {
 	return func(r *fundsRequest) {
-		r.rewards = rewards
+		r.fees = rewards
 	}
 }
 
-func (a *accountService) refreshBalances(ctx context.Context) error {
-	balances, err := a.getAccountBalances(ctx)
+func (a *accountService) RefreshBalances(ctx context.Context) error {
+	balances, err := a.GetAccountBalances(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get account balances: %w", err)
 	}
@@ -319,8 +320,8 @@ func (a *accountService) refreshBalances(ctx context.Context) error {
 	return nil
 }
 
-func (a *accountService) updateFunds(ctx context.Context, opts ...fundsOption) error {
-	if err := a.refreshBalances(ctx); err != nil {
+func (a *accountService) UpdateFunds(ctx context.Context, opts ...fundsOption) error {
+	if err := a.RefreshBalances(ctx); err != nil {
 		return fmt.Errorf("failed to refresh account balances: %w", err)
 	}
 
@@ -330,33 +331,29 @@ func (a *accountService) updateFunds(ctx context.Context, opts ...fundsOption) e
 	}
 	if b == nil {
 		b = &store.Bot{
-			Address: a.address(),
+			Address: a.Address(),
 			Name:    a.accountName,
 		}
 	}
+
+	// set to active only the bots that will be used
+	b.Active = true
 
 	b.Balances = make([]string, 0, len(a.balances))
 	for _, balance := range a.balances {
 		b.Balances = append(b.Balances, balance.String())
 	}
 
-	pendingRewards := b.PendingRewards.ToCoins()
+	pendingEarnings := b.PendingEarnings.ToCoins()
 
 	req := &fundsRequest{}
 	for _, opt := range opts {
 		opt(req)
 	}
 
-	if len(req.rewards) > 0 {
-		for _, r := range req.rewards {
-			pr, err := sdk.ParseCoinNormalized(r)
-			if err != nil {
-				return fmt.Errorf("failed to parse reward coin: %w", err)
-			}
-			pendingRewards = pendingRewards.Add(pr)
-		}
-
-		b.PendingRewards = store.CoinsToStrings(pendingRewards)
+	if len(req.fees) > 0 {
+		pendingEarnings = pendingEarnings.Add(req.fees...)
+		b.PendingEarnings = store.CoinsToStrings(pendingEarnings)
 	}
 
 	if err := a.store.SaveBot(ctx, b); err != nil {
@@ -366,13 +363,13 @@ func (a *accountService) updateFunds(ctx context.Context, opts ...fundsOption) e
 	return nil
 }
 
-func (a *accountService) address() string {
+func (a *accountService) Address() string {
 	return a.account.GetAddress().String()
 }
 
-func (a *accountService) getAccountBalances(ctx context.Context) (sdk.Coins, error) {
+func (a *accountService) GetAccountBalances(ctx context.Context) (sdk.Coins, error) {
 	resp, err := a.bankClient.SpendableBalances(ctx, &banktypes.QuerySpendableBalancesRequest{
-		Address: a.address(),
+		Address: a.Address(),
 	})
 	if err != nil {
 		return nil, err
@@ -380,15 +377,15 @@ func (a *accountService) getAccountBalances(ctx context.Context) (sdk.Coins, err
 	return resp.Balances, nil
 }
 
-func (a *accountService) getBalances() sdk.Coins {
+func (a *accountService) GetBalances() sdk.Coins {
 	return a.balances
 }
 
-func (a *accountService) setBalances(coins sdk.Coins) {
+func (a *accountService) SetBalances(coins sdk.Coins) {
 	a.balances = coins
 }
 
-func (a *accountService) getAccountName() string {
+func (a *accountService) GetAccountName() string {
 	return a.accountName
 }
 

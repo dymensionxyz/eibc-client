@@ -1,4 +1,4 @@
-package main
+package eibc
 
 import (
 	"context"
@@ -9,10 +9,12 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 	"go.uber.org/zap"
+
+	"github.com/dymensionxyz/eibc-client/config"
 )
 
 type whale struct {
-	accountSvc        accountSvc
+	accountSvc        AccountSvc
 	logger            *zap.Logger
 	topUpCh           <-chan topUpRequest
 	balanceThresholds map[string]sdk.Coin
@@ -29,7 +31,7 @@ type topUpRequest struct {
 }
 
 func newWhale(
-	accountSvc accountSvc,
+	accountSvc AccountSvc,
 	balanceThresholds map[string]sdk.Coin,
 	logger *zap.Logger,
 	slack *slacker,
@@ -50,22 +52,22 @@ func newWhale(
 
 func buildWhale(
 	logger *zap.Logger,
-	config whaleConfig,
+	cfg config.WhaleConfig,
 	slack *slacker,
 	nodeAddress, gasFees, gasPrices string,
 	minimumGasBalance sdk.Coin,
 	topUpCh chan topUpRequest,
 ) (*whale, error) {
-	clientCfg := clientConfig{
-		homeDir:        config.KeyringDir,
-		keyringBackend: config.KeyringBackend,
-		nodeAddress:    nodeAddress,
-		gasFees:        gasFees,
-		gasPrices:      gasPrices,
+	clientCfg := config.ClientConfig{
+		HomeDir:        cfg.KeyringDir,
+		KeyringBackend: cfg.KeyringBackend,
+		NodeAddress:    nodeAddress,
+		GasFees:        gasFees,
+		GasPrices:      gasPrices,
 	}
 
 	balanceThresholdMap := make(map[string]sdk.Coin)
-	for denom, threshold := range config.AllowedBalanceThresholds {
+	for denom, threshold := range cfg.AllowedBalanceThresholds {
 		coinStr := threshold + denom
 		coin, err := sdk.ParseCoinNormalized(coinStr)
 		if err != nil {
@@ -75,7 +77,7 @@ func buildWhale(
 		balanceThresholdMap[denom] = coin
 	}
 
-	cosmosClient, err := cosmosclient.New(getCosmosClientOptions(clientCfg)...)
+	cosmosClient, err := cosmosclient.New(config.GetCosmosClientOptions(clientCfg)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cosmos client for whale: %w", err)
 	}
@@ -84,7 +86,7 @@ func buildWhale(
 		cosmosClient,
 		nil, // whale doesn't need a store for now
 		logger,
-		config.AccountName,
+		cfg.AccountName,
 		minimumGasBalance,
 		topUpCh,
 	)
@@ -98,20 +100,20 @@ func buildWhale(
 		logger,
 		slack,
 		cosmosClient.Context().ChainID,
-		clientCfg.nodeAddress,
+		clientCfg.NodeAddress,
 		topUpCh,
 	), nil
 }
 
 func (w *whale) start(ctx context.Context) error {
-	balances, err := w.accountSvc.getAccountBalances(ctx)
+	balances, err := w.accountSvc.GetAccountBalances(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get account balances: %w", err)
 	}
 
 	w.logger.Info("starting service...",
-		zap.String("account", w.accountSvc.getAccountName()),
-		zap.String("address", w.accountSvc.address()),
+		zap.String("account", w.accountSvc.GetAccountName()),
+		zap.String("address", w.accountSvc.Address()),
 		zap.String("balances", balances.String()))
 
 	go w.topUpBalances(ctx)
@@ -131,7 +133,7 @@ func (w *whale) topUpBalances(ctx context.Context) {
 }
 
 func (w *whale) topUp(ctx context.Context, coins sdk.Coins, toAddr string) []string {
-	whaleBalances, err := w.accountSvc.getAccountBalances(ctx)
+	whaleBalances, err := w.accountSvc.GetAccountBalances(ctx)
 	if err != nil {
 		w.logger.Error("failed to get account balances", zap.Error(err))
 		return nil
@@ -182,7 +184,7 @@ func (w *whale) topUp(ctx context.Context, coins sdk.Coins, toAddr string) []str
 		zap.String("coins", canTopUp.String()),
 	)
 
-	if err = w.accountSvc.sendCoins(ctx, canTopUp, toAddr); err != nil {
+	if err = w.accountSvc.SendCoins(ctx, canTopUp, toAddr); err != nil {
 		w.logger.Error("failed to top up account", zap.Error(err))
 		return nil
 	}
@@ -211,7 +213,7 @@ func (w *whale) alertLowBalance(ctx context.Context, coin, balance sdk.Coin) {
 
 	_, err := w.slack.begOnSlack(
 		ctx,
-		w.accountSvc.address(),
+		w.accountSvc.Address(),
 		coin,
 		balance,
 		w.chainID,
@@ -220,6 +222,14 @@ func (w *whale) alertLowBalance(ctx context.Context, coin, balance sdk.Coin) {
 	if err != nil {
 		w.logger.Error("failed to beg on slack", zap.Error(err))
 	}
+}
+
+func (w *whale) GetAccountSvc() AccountSvc {
+	return w.accountSvc
+}
+
+func (w *whale) GetBalanceThresholds() map[string]sdk.Coin {
+	return w.balanceThresholds
 }
 
 func (w *whale) removeAlerted(denom string) {

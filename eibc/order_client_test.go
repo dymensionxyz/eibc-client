@@ -1,4 +1,4 @@
-package main
+package eibc
 
 import (
 	"context"
@@ -21,6 +21,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
+	"github.com/dymensionxyz/eibc-client/config"
 	"github.com/dymensionxyz/eibc-client/store"
 	"github.com/dymensionxyz/eibc-client/types"
 )
@@ -28,7 +29,7 @@ import (
 func TestOrderClient(t *testing.T) {
 	tests := []struct {
 		name                           string
-		config                         Config
+		config                         config.Config
 		store                          *mockStore
 		whaleBalance                   sdk.Coins
 		hubClient                      mockNodeClient
@@ -39,27 +40,28 @@ func TestOrderClient(t *testing.T) {
 		expectBotBalanceAfterFulfill   sdk.Coins
 		expectWhaleBalanceAfterFulfill sdk.Coins
 		expectBotBalanceAfterFinalize  sdk.Coins
+		expectBotClaimableEarnings     sdk.Coins
 		expectFulfilledOrderIDs        []string
 	}{
 		{
 			name: "sequencer mode, orders from poller: fulfilled",
-			config: Config{
-				OrderPolling: OrderPollingConfig{
+			config: config.Config{
+				OrderPolling: config.OrderPollingConfig{
 					Interval: time.Second,
 					Enabled:  true,
 				},
-				Whale: whaleConfig{
+				Whale: config.WhaleConfig{
 					AllowedBalanceThresholds: map[string]string{
 						"stake": "1000",
 					},
 				},
-				Bots: botConfig{
+				Bots: config.BotConfig{
 					NumberOfBots:   1,
 					TopUpFactor:    1,
 					MaxOrdersPerTx: 10,
 				},
-				FulfillCriteria: fulfillCriteria{
-					MinFeePercentage: minFeePercentage{
+				FulfillCriteria: config.FulfillCriteria{
+					MinFeePercentage: config.MinFeePercentage{
 						Asset: map[string]float32{
 							"stake": 0.1,
 						},
@@ -67,8 +69,8 @@ func TestOrderClient(t *testing.T) {
 							"rollapp1": 0.1,
 						},
 					},
-					FulfillmentMode: fulfillmentMode{
-						Level: fulfillmentModeSequencer,
+					FulfillmentMode: config.FulfillmentMode{
+						Level: config.FulfillmentModeSequencer,
 					},
 				},
 			},
@@ -101,22 +103,23 @@ func TestOrderClient(t *testing.T) {
 			expectBotBalanceAfterFulfill:   sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(0))),
 			expectWhaleBalanceAfterFulfill: sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(485))),
 			expectBotBalanceAfterFinalize:  sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(550))),
+			expectBotClaimableEarnings:     sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(35))),
 			expectFulfilledOrderIDs:        []string{"order1", "order2"},
 		}, {
 			name: "p2p mode, orders from events: fulfilled",
-			config: Config{
-				Whale: whaleConfig{
+			config: config.Config{
+				Whale: config.WhaleConfig{
 					AllowedBalanceThresholds: map[string]string{
 						"stake": "1000",
 					},
 				},
-				Bots: botConfig{
+				Bots: config.BotConfig{
 					NumberOfBots:   1,
 					TopUpFactor:    1,
 					MaxOrdersPerTx: 10,
 				},
-				FulfillCriteria: fulfillCriteria{
-					MinFeePercentage: minFeePercentage{
+				FulfillCriteria: config.FulfillCriteria{
+					MinFeePercentage: config.MinFeePercentage{
 						Asset: map[string]float32{
 							"stake": 0.1,
 						},
@@ -124,8 +127,8 @@ func TestOrderClient(t *testing.T) {
 							"rollapp1": 0.1,
 						},
 					},
-					FulfillmentMode: fulfillmentMode{
-						Level:              fulfillmentModeP2P,
+					FulfillmentMode: config.FulfillmentMode{
+						Level:              config.FulfillmentModeP2P,
 						ValidationWaitTime: 5 * time.Second,
 					},
 				},
@@ -144,13 +147,13 @@ func TestOrderClient(t *testing.T) {
 				minimumValidatedNodes:   2,
 				get: mockValidGet(map[string]map[int64]*blockValidatedResponse{
 					"location1": {
-						1: {ValidationLevel: validationLevelP2P},
+						1: {Result: validationLevelP2P},
 					},
 					"location2": {
-						1: {ValidationLevel: validationLevelP2P},
+						1: {Result: validationLevelP2P},
 					},
 					"location3": {
-						1: {ValidationLevel: validationLevelNone},
+						1: {Result: validationLevelNone},
 					},
 				}),
 			},
@@ -174,22 +177,23 @@ func TestOrderClient(t *testing.T) {
 			expectBotBalanceAfterFulfill:   sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(0))),
 			expectWhaleBalanceAfterFulfill: sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(485))),
 			expectBotBalanceAfterFinalize:  sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(550))),
+			expectBotClaimableEarnings:     sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(35))),
 			expectFulfilledOrderIDs:        []string{"order1", "order2"},
 		}, {
 			name: "settlement mode, orders from events: fulfilled",
-			config: Config{
-				Whale: whaleConfig{
+			config: config.Config{
+				Whale: config.WhaleConfig{
 					AllowedBalanceThresholds: map[string]string{
 						"stake": "1000",
 					},
 				},
-				Bots: botConfig{
+				Bots: config.BotConfig{
 					NumberOfBots:   1,
 					TopUpFactor:    1,
 					MaxOrdersPerTx: 10,
 				},
-				FulfillCriteria: fulfillCriteria{
-					MinFeePercentage: minFeePercentage{
+				FulfillCriteria: config.FulfillCriteria{
+					MinFeePercentage: config.MinFeePercentage{
 						Asset: map[string]float32{
 							"stake": 0.1,
 						},
@@ -197,8 +201,8 @@ func TestOrderClient(t *testing.T) {
 							"rollapp1": 0.1,
 						},
 					},
-					FulfillmentMode: fulfillmentMode{
-						Level:              fulfillmentModeSettlement,
+					FulfillmentMode: config.FulfillmentMode{
+						Level:              config.FulfillmentModeSettlement,
 						ValidationWaitTime: 5 * time.Second,
 					},
 				},
@@ -217,13 +221,13 @@ func TestOrderClient(t *testing.T) {
 				minimumValidatedNodes:   2,
 				get: mockValidGet(map[string]map[int64]*blockValidatedResponse{
 					"location1": {
-						1: {ValidationLevel: validationLevelSettlement},
+						1: {Result: validationLevelSettlement},
 					},
 					"location2": {
-						1: {ValidationLevel: validationLevelP2P},
+						1: {Result: validationLevelP2P},
 					},
 					"location3": {
-						1: {ValidationLevel: validationLevelSettlement},
+						1: {Result: validationLevelSettlement},
 					},
 				}),
 			},
@@ -247,6 +251,7 @@ func TestOrderClient(t *testing.T) {
 			expectBotBalanceAfterFulfill:   sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(0))),
 			expectWhaleBalanceAfterFulfill: sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(485))),
 			expectBotBalanceAfterFinalize:  sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(550))),
+			expectBotClaimableEarnings:     sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(35))),
 			expectFulfilledOrderIDs:        []string{"order1", "order2"},
 		},
 	}
@@ -265,7 +270,7 @@ func TestOrderClient(t *testing.T) {
 			require.NoError(t, err)
 
 			go func() {
-				err = oc.start(context.Background())
+				err = oc.Start(context.Background())
 				require.NoError(t, err)
 			}()
 
@@ -290,12 +295,13 @@ func TestOrderClient(t *testing.T) {
 
 			// ======= after fulfilling =========
 
+			botName := "bot-0" // TODO: use multiple bots
 			// check bot balance
-			balanceAfterFulfill := oc.bots["bot-0"].accountSvc.getBalances()
+			balanceAfterFulfill := oc.bots[botName].accountSvc.GetBalances()
 			require.Equal(t, tt.expectBotBalanceAfterFulfill.String(), balanceAfterFulfill.String())
 
 			// check whale balance
-			whaleBalanceAfterFulfill := oc.whale.accountSvc.getBalances()
+			whaleBalanceAfterFulfill := oc.whale.accountSvc.GetBalances()
 			require.Equal(t, tt.expectWhaleBalanceAfterFulfill.String(), whaleBalanceAfterFulfill.String())
 
 			// check order store
@@ -346,21 +352,28 @@ func TestOrderClient(t *testing.T) {
 			// =========== after finalizing =========
 
 			// check bot balance
-			balanceAfterFinalize := oc.bots["bot-0"].accountSvc.getBalances()
+			bot := oc.bots[botName]
+			balanceAfterFinalize := bot.accountSvc.GetBalances()
 			require.Equal(t, tt.expectBotBalanceAfterFinalize.String(), balanceAfterFinalize.String())
+
+			// check store bot
+			storeBot, _ := oc.orderTracker.store.GetBot(context.Background(), bot.accountSvc.Address())
+			require.NotNil(t, storeBot)
+			require.True(t, storeBot.Active)
+			require.Equal(t, tt.expectBotBalanceAfterFinalize.String(), strings.Join(storeBot.Balances, ","))
+			require.Empty(t, storeBot.PendingEarnings)
+			require.Equal(t, tt.expectBotClaimableEarnings.String(), strings.Join(storeBot.ClaimableEarnings, ","))
 
 			// check store orders
 			orders, err = oc.orderTracker.store.GetOrders(ctx)
 			require.NoError(t, err)
 			require.Empty(t, orders)
-
-			oc.stop()
 		})
 	}
 }
 
 func setupTestOrderClient(
-	config Config,
+	cfg config.Config,
 	bstore *mockStore,
 	whaleBalance sdk.Coins,
 	pollOrders func() ([]Order, error),
@@ -369,8 +382,8 @@ func setupTestOrderClient(
 	fullNodeClient *nodeClient,
 ) (*orderClient, error) {
 	logger, _ := zap.NewDevelopment()
-	orderCh := make(chan []*demandOrder, newOrderBufferSize)
-	fulfilledOrdersCh := make(chan *orderBatch, newOrderBufferSize)
+	orderCh := make(chan []*demandOrder, config.NewOrderBufferSize)
+	fulfilledOrdersCh := make(chan *orderBatch, config.NewOrderBufferSize)
 
 	// tracker
 	bstore.bots = make(map[string]*store.Bot)
@@ -387,8 +400,8 @@ func setupTestOrderClient(
 		fulfilledOrdersCh,
 		bots,
 		"",
-		config.Bots.MaxOrdersPerTx,
-		&config.FulfillCriteria,
+		cfg.Bots.MaxOrdersPerTx,
+		&cfg.FulfillCriteria,
 		orderCh,
 		logger,
 	)
@@ -400,8 +413,8 @@ func setupTestOrderClient(
 	eventerClient.addOrderCh = make(chan coretypes.ResultEvent, 1)
 	eventerClient.stateInfoCh = make(chan coretypes.ResultEvent, 1)
 
-	rollapps := make([]string, 0, len(config.FulfillCriteria.MinFeePercentage.Chain))
-	for chain := range config.FulfillCriteria.MinFeePercentage.Chain {
+	rollapps := make([]string, 0, len(cfg.FulfillCriteria.MinFeePercentage.Chain))
+	for chain := range cfg.FulfillCriteria.MinFeePercentage.Chain {
 		rollapps = append(rollapps, chain)
 	}
 
@@ -432,12 +445,12 @@ func setupTestOrderClient(
 		accountService: was,
 	}
 	was.bankClient = bc
-	accountBalances[was.address()] = whaleBalance
+	accountBalances[was.Address()] = whaleBalance
 
 	chainID := "test-chain-id"
 
 	balanceThresholdMap := make(map[string]sdk.Coin)
-	for denom, threshold := range config.Whale.AllowedBalanceThresholds {
+	for denom, threshold := range cfg.Whale.AllowedBalanceThresholds {
 		coinStr := threshold + denom
 		coin, err := sdk.ParseCoinNormalized(coinStr)
 		if err != nil {
@@ -459,7 +472,7 @@ func setupTestOrderClient(
 		topUpCh,
 	)
 
-	for range config.Bots.NumberOfBots {
+	for range cfg.Bots.NumberOfBots {
 		botName := fmt.Sprintf("bot-%d", 0)
 		as := &accountService{
 			accountName: botName,
@@ -477,16 +490,16 @@ func setupTestOrderClient(
 		as.client = &hc
 		b := newOrderFulfiller(as, orderCh, fulfilledOrdersCh, &hc, logger)
 		b.FulfillDemandOrders = bc.mockFulfillDemandOrders
-		bots[b.accountSvc.getAccountName()] = b
+		bots[b.accountSvc.GetAccountName()] = b
 	}
 
 	// poller
 	var poller *orderPoller
-	if config.OrderPolling.Enabled {
+	if cfg.OrderPolling.Enabled {
 		poller = newOrderPoller(
 			chainID,
 			ordTracker,
-			config.OrderPolling,
+			cfg.OrderPolling,
 			logger,
 		)
 		poller.getOrders = pollOrders
@@ -498,10 +511,9 @@ func setupTestOrderClient(
 		orderTracker: ordTracker,
 		bots:         bots,
 		whale:        whaleSvc,
-		config:       config,
+		config:       cfg,
 		logger:       logger,
 		orderPoller:  poller,
-		stopCh:       make(chan struct{}),
 	}
 
 	return oc, nil
@@ -530,7 +542,7 @@ func mockValidGet(resps map[string]map[int64]*blockValidatedResponse) getFn {
 			}
 		}
 		return &blockValidatedResponse{
-			ValidationLevel: validationLevelNone,
+			Result: validationLevelNone,
 		}, nil
 	}
 }
@@ -625,7 +637,6 @@ func (m *mockStore) GetOrder(_ context.Context, id string) (*store.Order, error)
 	return order, nil
 }
 
-func (m *mockStore) UpdateManyOrders(_ context.Context, orders []*store.Order) error { return nil }
 func (m *mockStore) SaveManyOrders(_ context.Context, orders []*store.Order) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -644,6 +655,16 @@ func (m *mockStore) DeleteOrder(_ context.Context, id string) error {
 	return nil
 }
 
+func (m *mockStore) DeactivateAllBots(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, bot := range m.bots {
+		bot.Active = false
+	}
+	return nil
+}
+
 type mockBankClient struct {
 	*accountService
 }
@@ -655,14 +676,14 @@ func (m *mockBankClient) SpendableBalances(_ context.Context, in *btypes.QuerySp
 }
 
 func (m *mockBankClient) mockFulfillDemandOrders(demandOrder ...*demandOrder) error {
-	balances := m.getBalances()
+	balances := m.GetBalances()
 
 	for _, order := range demandOrder {
 		coins := order.amount.Sub(order.fee...)
 		balances = balances.Sub(coins...)
 
-		m.setBalances(balances)
-		accountBalances[m.address()] = balances
+		m.SetBalances(balances)
+		accountBalances[m.Address()] = balances
 	}
 	return nil
 }
