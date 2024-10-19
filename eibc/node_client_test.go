@@ -66,14 +66,13 @@ func Test_nodeClient_nodeBlockValidated(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &nodeClient{
-				client:                  tt.fields.client,
-				locations:               tt.fields.locations,
-				expectedValidationLevel: tt.fields.expectedValidationLevel,
+				client:    tt.fields.client,
+				locations: tt.fields.locations,
 			}
 			c.get = c.getHttp
 
 			ctx := context.Background()
-			got, err := c.nodeBlockValidated(ctx, tt.fields.locations[0], tt.args.height)
+			got, err := c.nodeBlockValidated(ctx, tt.fields.locations[0], tt.args.height, tt.fields.expectedValidationLevel)
 			if !tt.wantErr(t, err, fmt.Sprintf("nodeBlockValidated(%v, %v)", tt.fields.locations[0], tt.args.height)) {
 				return
 			}

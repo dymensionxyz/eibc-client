@@ -12,11 +12,10 @@ import (
 )
 
 type nodeClient struct {
-	client                  *http.Client
-	locations               []string
-	expectedValidationLevel validationLevel
-	minimumValidatedNodes   int
-	get                     getFn
+	client                *http.Client
+	locations             []string
+	minimumValidatedNodes int
+	get                   getFn
 }
 
 type getFn func(ctx context.Context, url string) (*blockValidatedResponse, error)
@@ -43,7 +42,6 @@ const (
 
 func newNodeClient(
 	locations []string,
-	expectedValidationLevel validationLevel,
 	minimumValidatedNodes int,
 ) (*nodeClient, error) {
 	if minimumValidatedNodes == 0 {
@@ -56,9 +54,8 @@ func newNodeClient(
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
-		locations:               locations,
-		expectedValidationLevel: expectedValidationLevel,
-		minimumValidatedNodes:   minimumValidatedNodes,
+		locations:             locations,
+		minimumValidatedNodes: minimumValidatedNodes,
 	}
 	n.get = n.getHttp
 	return n, nil
@@ -68,7 +65,7 @@ const (
 	blockValidatedPath = "/block_validated"
 )
 
-func (c *nodeClient) BlockValidated(ctx context.Context, height int64) (bool, error) {
+func (c *nodeClient) BlockValidated(ctx context.Context, height int64, expectedValidationLevel validationLevel) (bool, error) {
 	var validatedNodes int32
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(c.locations))
@@ -77,7 +74,7 @@ func (c *nodeClient) BlockValidated(ctx context.Context, height int64) (bool, er
 		wg.Add(1)
 		go func(ctx context.Context, location string) {
 			defer wg.Done()
-			valid, err := c.nodeBlockValidated(ctx, location, height)
+			valid, err := c.nodeBlockValidated(ctx, location, height, expectedValidationLevel)
 			if err != nil {
 				errChan <- err
 				return
@@ -98,13 +95,18 @@ func (c *nodeClient) BlockValidated(ctx context.Context, height int64) (bool, er
 	return int(validatedNodes) >= c.minimumValidatedNodes, nil
 }
 
-func (c *nodeClient) nodeBlockValidated(ctx context.Context, location string, height int64) (bool, error) {
+func (c *nodeClient) nodeBlockValidated(
+	ctx context.Context,
+	location string,
+	height int64,
+	expectedValidationLevel validationLevel,
+) (bool, error) {
 	url := fmt.Sprintf("%s%s?height=%d", location, blockValidatedPath, height)
 	validated, err := c.get(ctx, url)
 	if err != nil {
 		return false, err
 	}
-	return validated.Result >= c.expectedValidationLevel, nil
+	return validated.Result >= expectedValidationLevel, nil
 }
 
 func (c *nodeClient) getHttp(ctx context.Context, url string) (*blockValidatedResponse, error) {

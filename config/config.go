@@ -4,27 +4,25 @@ import (
 	"log"
 	"time"
 
-	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 	"github.com/ignite/cli/ignite/pkg/cosmosaccount"
 	"github.com/mitchellh/go-homedir"
 	"github.com/spf13/viper"
+
+	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 )
 
 type Config struct {
 	ServerAddress string             `mapstructure:"server_address"`
-	HomeDir       string             `mapstructure:"home_dir"`
 	NodeAddress   string             `mapstructure:"node_address"`
 	DBPath        string             `mapstructure:"db_path"`
 	Gas           GasConfig          `mapstructure:"gas"`
 	OrderPolling  OrderPollingConfig `mapstructure:"order_polling"`
 
-	Whale           WhaleConfig     `mapstructure:"whale"`
-	Bots            BotConfig       `mapstructure:"bots"`
-	FulfillCriteria FulfillCriteria `mapstructure:"fulfill_criteria"`
+	Operator   OperatorConfig   `mapstructure:"operator"`
+	Bots       BotConfig        `mapstructure:"bots"`
+	Validation ValidationConfig `mapstructure:"validation"`
 
-	LogLevel    string      `mapstructure:"log_level"`
-	SlackConfig SlackConfig `mapstructure:"slack"`
-	SkipRefund  bool        `mapstructure:"skip_refund"`
+	LogLevel string `mapstructure:"log_level"`
 }
 
 type OrderPollingConfig struct {
@@ -34,83 +32,63 @@ type OrderPollingConfig struct {
 }
 
 type GasConfig struct {
-	Prices            string `mapstructure:"prices"`
-	Fees              string `mapstructure:"fees"`
-	MinimumGasBalance string `mapstructure:"minimum_gas_balance"`
+	Prices string `mapstructure:"prices"`
+	Fees   string `mapstructure:"fees"`
 }
 
 type BotConfig struct {
-	NumberOfBots   int                          `mapstructure:"number_of_bots"`
+	NumberOfBots        int                          `mapstructure:"number_of_bots"`
+	OperatorAddress     string                       `mapstructure:"operator_address"`
+	PolicyAddress       string                       `mapstructure:"policy_address"`
+	MinOperatorFeeShare string                       `mapstructure:"min_operator_fee_share"`
+	KeyringBackend      cosmosaccount.KeyringBackend `mapstructure:"keyring_backend"`
+	KeyringDir          string                       `mapstructure:"keyring_dir"`
+	MaxOrdersPerTx      int                          `mapstructure:"max_orders_per_tx"`
+}
+
+type OperatorConfig struct {
+	AccountName    string                       `mapstructure:"account_name"`
 	KeyringBackend cosmosaccount.KeyringBackend `mapstructure:"keyring_backend"`
 	KeyringDir     string                       `mapstructure:"keyring_dir"`
-	TopUpFactor    int                          `mapstructure:"top_up_factor"`
-	MaxOrdersPerTx int                          `mapstructure:"max_orders_per_tx"`
+	GroupID        int                          `mapstructure:"group_id"`
 }
 
-type WhaleConfig struct {
-	AccountName              string                       `mapstructure:"account_name"`
-	KeyringBackend           cosmosaccount.KeyringBackend `mapstructure:"keyring_backend"`
-	KeyringDir               string                       `mapstructure:"keyring_dir"`
-	AllowedBalanceThresholds map[string]string            `mapstructure:"allowed_balance_thresholds"`
-}
-
-type FulfillCriteria struct {
-	MinFeePercentage MinFeePercentage `mapstructure:"min_fee_percentage"`
-	FulfillmentMode  FulfillmentMode  `mapstructure:"fulfillment_mode"`
-}
-
-type FulfillmentMode struct {
-	Level              FulfillmentLevel `mapstructure:"level"`
-	FullNodes          []string         `mapstructure:"full_nodes"`
-	MinConfirmations   int              `mapstructure:"min_confirmations"`
-	ValidationWaitTime time.Duration    `mapstructure:"validation_wait_time"`
-}
-
-type MinFeePercentage struct {
-	Chain map[string]float32 `mapstructure:"chain"`
-	Asset map[string]float32 `mapstructure:"asset"`
-}
-
-type SlackConfig struct {
-	Enabled   bool   `mapstructure:"enabled"`
-	BotToken  string `mapstructure:"bot_token"`
-	AppToken  string `mapstructure:"app_token"`
-	ChannelID string `mapstructure:"channel_id"`
+type ValidationConfig struct {
+	FallbackLevel      ValidationLevel `mapstructure:"fallback_level"`
+	FullNodes          []string        `mapstructure:"full_nodes"`
+	MinConfirmations   int             `mapstructure:"min_confirmations"`
+	ValidationWaitTime time.Duration   `mapstructure:"validation_wait_time"`
 }
 
 const (
-	defaultNodeAddress       = "http://localhost:36657"
-	defaultDBPath            = "mongodb://localhost:27017"
-	HubAddressPrefix         = "dym"
-	PubKeyPrefix             = "pub"
-	defaultLogLevel          = "info"
-	defaultHubDenom          = "adym"
-	defaultGasFees           = "3000000000000000" + defaultHubDenom
-	defaultMinimumGasBalance = "1000000000000000000" + defaultHubDenom
-	testKeyringBackend       = "test"
+	defaultNodeAddress = "http://localhost:36657"
+	defaultDBPath      = "mongodb://localhost:27017"
+	HubAddressPrefix   = "dym"
+	PubKeyPrefix       = "pub"
+	defaultLogLevel    = "info"
+	defaultHubDenom    = "adym"
+	defaultGasFees     = "3000000000000000" + defaultHubDenom
+	testKeyringBackend = "test"
 
 	BotNamePrefix               = "bot-"
-	defaultWhaleAccountName     = "client"
-	defaultBotTopUpFactor       = 5
+	defaultOperatorAccountName  = "client"
 	defaultNumberOfBots         = 30
 	NewOrderBufferSize          = 100
 	defaultMaxOrdersPerTx       = 10
 	defaultOrderRefreshInterval = 30 * time.Second
 )
 
-type FulfillmentLevel string
+type ValidationLevel string
 
 const (
-	FulfillmentModeSequencer  FulfillmentLevel = "sequencer"
-	FulfillmentModeP2P                         = "p2p"
-	FulfillmentModeSettlement                  = "settlement"
+	ValidationModeSequencer  ValidationLevel = "sequencer"
+	ValidationModeP2P                        = "p2p"
+	ValidationModeSettlement                 = "settlement"
 )
 
-func (f FulfillmentLevel) Validate() bool {
-	return f == FulfillmentModeSequencer || f == FulfillmentModeP2P || f == FulfillmentModeSettlement
+func (f ValidationLevel) Validate() bool {
+	return f == ValidationModeSequencer || f == ValidationModeP2P || f == ValidationModeSettlement
 }
-
-var defaultBalanceThresholds = map[string]string{defaultHubDenom: "1000000000000"}
 
 func InitConfig() {
 	// Set default values
@@ -123,7 +101,6 @@ func InitConfig() {
 
 	viper.SetDefault("server_address", ":8000")
 	viper.SetDefault("log_level", defaultLogLevel)
-	viper.SetDefault("home_dir", defaultHomeDir)
 	viper.SetDefault("node_address", defaultNodeAddress)
 	viper.SetDefault("db_path", defaultDBPath)
 
@@ -131,17 +108,14 @@ func InitConfig() {
 	viper.SetDefault("order_polling.enabled", false)
 
 	viper.SetDefault("gas.fees", defaultGasFees)
-	viper.SetDefault("gas.minimum_gas_balance", defaultMinimumGasBalance)
 
-	viper.SetDefault("whale.account_name", defaultWhaleAccountName)
-	viper.SetDefault("whale.keyring_backend", testKeyringBackend)
-	viper.SetDefault("whale.allowed_balance_thresholds", defaultBalanceThresholds)
-	viper.SetDefault("whale.keyring_dir", defaultHomeDir)
+	viper.SetDefault("operator.account_name", defaultOperatorAccountName)
+	viper.SetDefault("operator.keyring_backend", testKeyringBackend)
+	viper.SetDefault("operator.keyring_dir", defaultHomeDir)
 
 	viper.SetDefault("bots.keyring_backend", testKeyringBackend)
 	viper.SetDefault("bots.keyring_dir", defaultHomeDir)
 	viper.SetDefault("bots.number_of_bots", defaultNumberOfBots)
-	viper.SetDefault("bots.top_up_factor", defaultBotTopUpFactor)
 	viper.SetDefault("bots.max_orders_per_tx", defaultMaxOrdersPerTx)
 
 	viper.SetDefault("slack.enabled", false)
@@ -167,6 +141,8 @@ type ClientConfig struct {
 	NodeAddress    string
 	GasFees        string
 	GasPrices      string
+	FeeGranter     string
+	FeePayer       string
 	KeyringBackend cosmosaccount.KeyringBackend
 }
 
@@ -180,6 +156,7 @@ func GetCosmosClientOptions(config ClientConfig) []cosmosclient.Option {
 		cosmosclient.WithGasPrices(config.GasPrices),
 		cosmosclient.WithKeyringBackend(config.KeyringBackend),
 		cosmosclient.WithKeyringDir(config.HomeDir),
+		cosmosclient.WithFeeGranter(config.FeeGranter),
 	}
 	return options
 }

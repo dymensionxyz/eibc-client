@@ -15,10 +15,10 @@ import (
 )
 
 type orderEventer struct {
-	rpc         rpcclient.Client
-	rollapps    []string
-	eventClient rpcclient.EventsClient
-	logger      *zap.Logger
+	rpc                           rpcclient.Client
+	subscribedStateUpdateRollapps map[string]struct{}
+	eventClient                   rpcclient.EventsClient
+	logger                        *zap.Logger
 
 	orderTracker *orderTracker
 	subscriberID string
@@ -27,17 +27,16 @@ type orderEventer struct {
 func newOrderEventer(
 	client cosmosclient.Client,
 	subscriberID string,
-	rollapps []string,
 	orderTracker *orderTracker,
 	logger *zap.Logger,
 ) *orderEventer {
 	return &orderEventer{
-		rpc:          client.RPC,
-		eventClient:  client.WSEvents,
-		subscriberID: subscriberID,
-		rollapps:     rollapps,
-		logger:       logger.With(zap.String("module", "order-eventer")),
-		orderTracker: orderTracker,
+		rpc:                           client.RPC,
+		eventClient:                   client.WSEvents,
+		subscriberID:                  subscriberID,
+		subscribedStateUpdateRollapps: make(map[string]struct{}),
+		logger:                        logger.With(zap.String("module", "order-eventer")),
+		orderTracker:                  orderTracker,
 	}
 }
 
@@ -56,16 +55,36 @@ func (e *orderEventer) start(ctx context.Context) error {
 		return fmt.Errorf("failed to subscribe to pending demand orders: %w", err)
 	}
 
-	// TODO: consider that if the client is offline if might miss finalized orders, and the state might not be updated
-	if err := e.waitForFinalizedOrder(ctx); err != nil {
-		return fmt.Errorf("failed to wait for finalized orders: %w", err)
-	}
+	go func() {
+		time.Sleep(3 * time.Second)
 
-	for _, rollappID := range e.rollapps {
-		if err := e.subscribeToStateUpdates(ctx, rollappID); err != nil {
-			return fmt.Errorf("failed to subscribe to state updates: %w", err)
+		res1 := tmtypes.ResultEvent{
+			Events: map[string][]string{
+				createdEvent + ".order_id":      {"388cedaafbe9ea05c5b6422970005d4a9cb13b2b679afedb99aa82ccff8784aa"},
+				createdEvent + ".price":         {"1000adym"},
+				createdEvent + ".packet_status": {"PENDING"},
+				createdEvent + ".fee":           {"100adym"},
+				createdEvent + ".rollapp_id":    {"rollappwasme_1235-1"},
+				createdEvent + ".packet_key":    {"somepacketkey1"},
+				createdEvent + ".proof_height":  {"100"},
+			},
 		}
-	}
+
+		res2 := tmtypes.ResultEvent{
+			Events: map[string][]string{
+				createdEvent + ".order_id":      {"43179f65b72f3b213457e0c5a16f998ca3ed018f8d8010ba62753027858b63bb"},
+				createdEvent + ".price":         {"1000adym"},
+				createdEvent + ".packet_status": {"PENDING"},
+				createdEvent + ".fee":           {"100adym"},
+				createdEvent + ".rollapp_id":    {"rollappwasme_1235-1"},
+				createdEvent + ".packet_key":    {"somepacketkey1"},
+				createdEvent + ".proof_height":  {"100"},
+			},
+		}
+
+		_ = e.enqueueEventOrders(ctx, res1)
+		_ = e.enqueueEventOrders(ctx, res2)
+	}()
 
 	return nil
 }
@@ -117,7 +136,7 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 			continue
 		}
 
-		fee, err := sdk.ParseCoinsNormalized(fees[i])
+		fee, err := sdk.ParseCoinNormalized(fees[i])
 		if err != nil {
 			e.logger.Error("failed to parse fee", zap.Error(err))
 			continue
@@ -129,12 +148,12 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 			continue
 		}
 
-		validationWaitTime := e.orderTracker.fulfillCriteria.FulfillmentMode.ValidationWaitTime
+		validationWaitTime := e.orderTracker.validation.ValidationWaitTime
 		validDeadline := time.Now().Add(validationWaitTime)
 
 		order := &demandOrder{
 			id:            id,
-			denom:         fee.GetDenomByIndex(0),
+			denom:         fee.Denom,
 			amount:        price,
 			fee:           fee,
 			status:        statuses[i],
@@ -148,6 +167,21 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 			continue
 		}
 
+		lp, err := e.orderTracker.findLPForOrder(order)
+		if err != nil {
+			e.logger.Error("failed to find LP for order", zap.Error(err))
+			continue
+		}
+
+		if lp == nil {
+			e.logger.Error("failed to find LP for order")
+			continue
+		}
+
+		order.lpAddress = lp.address
+		order.settlementValidated = lp.settlementValidated
+		order.operatorFeePart = lp.operatorFeeShare
+
 		newOrders = append(newOrders, order)
 	}
 
@@ -157,17 +191,6 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 func (e *orderEventer) subscribeToPendingDemandOrders(ctx context.Context) error {
 	query := fmt.Sprintf("%s.is_fulfilled='false'", createdEvent)
 	return e.subscribeToEvent(ctx, "pending demand", query, e.enqueueEventOrders)
-}
-
-func (e *orderEventer) waitForFinalizedOrder(ctx context.Context) error {
-	// TODO: should filter by fulfiller (one of the bots)?
-	query := fmt.Sprintf("%s.is_fulfilled='true' AND %s.new_packet_status='FINALIZED'", finalizedEvent, finalizedEvent)
-	return e.subscribeToEvent(ctx, "finalized", query, e.orderTracker.finalizeOrders)
-}
-
-func (e *orderEventer) subscribeToStateUpdates(ctx context.Context, rollappID string) error {
-	query := fmt.Sprintf("%s.rollapp_id='%s'", stateInfoEvent, rollappID)
-	return e.subscribeToEvent(ctx, "state update", query, e.orderTracker.checkEventFinalized)
 }
 
 func (e *orderEventer) subscribeToEvent(ctx context.Context, event string, query string, callback func(ctx context.Context, event tmtypes.ResultEvent) error) error {

@@ -3,41 +3,55 @@ package eibc
 import (
 	"context"
 	"fmt"
-	"strings"
+	"sort"
 	"sync"
 	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/dymensionxyz/cosmosclient/cosmosclient"
-	tmtypes "github.com/tendermint/tendermint/rpc/core/types"
+	"github.com/cosmos/cosmos-sdk/x/authz"
+	"github.com/cosmos/gogoproto/proto"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
+	"github.com/dymensionxyz/cosmosclient/cosmosclient"
+
 	"github.com/dymensionxyz/eibc-client/config"
-	"github.com/dymensionxyz/eibc-client/store"
 	"github.com/dymensionxyz/eibc-client/types"
 )
 
 type orderTracker struct {
-	getStateInfo   getStateInfoFn
 	broadcastTx    broadcastTxFn
+	getLPGrants    getLPGrantsFn
 	fullNodeClient *nodeClient
-	store          botStore
 	logger         *zap.Logger
 	bots           map[string]*orderFulfiller
+	policyAddress  string
 
-	fomu            sync.Mutex
-	fulfilledOrders map[string]*demandOrder
-	validOrdersCh   chan []*demandOrder
-	outputOrdersCh  chan<- []*demandOrder
+	fomu                sync.Mutex
+	lpmu                sync.Mutex
+	fulfilledOrders     map[string]*demandOrder
+	validOrdersCh       chan []*demandOrder
+	outputOrdersCh      chan<- []*demandOrder
+	lps                 map[string]lp
+	minOperatorFeeShare sdk.Dec
 
 	pool orderPool
 
 	batchSize                int
 	finalizedCheckerInterval time.Duration
-	fulfillCriteria          *config.FulfillCriteria
+	validation               *config.ValidationConfig
 	fulfilledOrdersCh        chan *orderBatch
 	subscriberID             string
+}
+
+type lp struct {
+	address             string
+	rollapps            map[string]bool
+	denoms              map[string]bool
+	maxPrice            sdk.Coins
+	minFeePercentage    sdk.Dec
+	operatorFeeShare    sdk.Dec
+	settlementValidated bool
 }
 
 const (
@@ -45,46 +59,37 @@ const (
 )
 
 type (
-	broadcastTxFn  func(accName string, msgs ...sdk.Msg) (cosmosclient.Response, error)
-	getStateInfoFn func(ctx context.Context, request *types.QueryGetStateInfoRequest, opts ...grpc.CallOption) (*types.QueryGetStateInfoResponse, error)
+	broadcastTxFn func(accName string, msgs ...sdk.Msg) (cosmosclient.Response, error)
+	getLPGrantsFn func(ctx context.Context, in *authz.QueryGranteeGrantsRequest, opts ...grpc.CallOption) (*authz.QueryGranteeGrantsResponse, error)
 )
 
-type botStore interface {
-	GetOrders(ctx context.Context, opts ...store.OrderOption) ([]*store.Order, error)
-	GetOrder(ctx context.Context, id string) (*store.Order, error)
-	SaveManyOrders(ctx context.Context, orders []*store.Order) error
-	UpdateManyOrders(ctx context.Context, orders []*store.Order) error
-	DeleteOrder(ctx context.Context, id string) error
-	GetBot(ctx context.Context, key string, opts ...store.BotOption) (*store.Bot, error)
-	GetBots(ctx context.Context, opts ...store.BotOption) ([]*store.Bot, error)
-	SaveBot(ctx context.Context, bot *store.Bot) error
-	Close()
-}
-
 func newOrderTracker(
-	getStateInfo getStateInfoFn,
-	broadcastTx broadcastTxFn,
+	hubClient cosmosclient.Client,
+	policyAddress string,
+	minOperatorFeeShare sdk.Dec,
 	fullNodeClient *nodeClient,
-	store botStore,
 	fulfilledOrdersCh chan *orderBatch,
 	bots map[string]*orderFulfiller,
 	subscriberID string,
 	batchSize int,
-	fCriteria *config.FulfillCriteria,
+	validation *config.ValidationConfig,
 	ordersCh chan<- []*demandOrder,
 	logger *zap.Logger,
 ) *orderTracker {
+	azc := authz.NewQueryClient(hubClient.Context())
 	return &orderTracker{
-		getStateInfo:             getStateInfo,
-		broadcastTx:              broadcastTx,
+		broadcastTx:              hubClient.BroadcastTx,
+		getLPGrants:              azc.GranteeGrants,
+		policyAddress:            policyAddress,
+		minOperatorFeeShare:      minOperatorFeeShare,
 		fullNodeClient:           fullNodeClient,
-		store:                    store,
 		pool:                     orderPool{orders: make(map[string]*demandOrder)},
 		fulfilledOrdersCh:        fulfilledOrdersCh,
 		bots:                     bots,
+		lps:                      make(map[string]lp),
 		batchSize:                batchSize,
 		finalizedCheckerInterval: defaultFinalizedCheckerInterval,
-		fulfillCriteria:          fCriteria,
+		validation:               validation,
 		validOrdersCh:            make(chan []*demandOrder),
 		outputOrdersCh:           ordersCh,
 		logger:                   logger.With(zap.String("module", "order-resolver")),
@@ -94,15 +99,82 @@ func newOrderTracker(
 }
 
 func (or *orderTracker) start(ctx context.Context) error {
-	if err := or.loadTrackedOrders(ctx); err != nil {
-		return fmt.Errorf("failed to load orders: %w", err)
+	if err := or.refreshLPs(ctx); err != nil {
+		return fmt.Errorf("failed to load LPs: %w", err)
 	}
 
 	or.selectOrdersWorker(ctx)
 
-	// go or.syncStore(ctx) TODO: do we really need all the orders in the store before fulfilling?
 	go or.fulfilledOrdersWorker(ctx)
-	go or.finalizedChecker(ctx)
+
+	return nil
+}
+
+func (or *orderTracker) refreshLPs(ctx context.Context) error {
+	if err := or.loadLPs(ctx); err != nil {
+		return fmt.Errorf("failed to load LPs: %w", err)
+	}
+
+	go func() {
+		t := time.NewTicker(5 * time.Minute)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := or.loadLPs(ctx); err != nil {
+					or.logger.Error("failed to load LPs", zap.Error(err))
+				}
+			}
+		}
+	}()
+	return nil
+}
+
+func (or *orderTracker) loadLPs(ctx context.Context) error {
+	grants, err := or.getLPGrants(ctx, &authz.QueryGranteeGrantsRequest{
+		Grantee: or.policyAddress,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get LP grants: %w", err)
+	}
+
+	or.lpmu.Lock()
+	defer or.lpmu.Unlock()
+
+	for _, grant := range grants.Grants {
+		if grant.Authorization == nil {
+			continue
+		}
+
+		g := new(types.FulfillOrderAuthorization)
+		if err = proto.Unmarshal(grant.Authorization.Value, g); err != nil {
+			return fmt.Errorf("failed to unmarshal grant: %w", err)
+		}
+
+		lp := lp{
+			address:             grant.Granter,
+			rollapps:            make(map[string]bool),
+			denoms:              make(map[string]bool),
+			maxPrice:            g.MaxPrice,
+			minFeePercentage:    g.MinLpFeePercentage.Dec,
+			operatorFeeShare:    g.OperatorFeeShare.Dec,
+			settlementValidated: g.SettlementValidated,
+		}
+
+		// check the operator fee is the minimum for what the operator wants
+		if lp.operatorFeeShare.LT(or.minOperatorFeeShare) {
+			continue
+		}
+
+		for _, rollappID := range g.Rollapps {
+			lp.rollapps[rollappID] = true
+		}
+		for _, denom := range g.Denoms {
+			lp.denoms[denom] = true
+		}
+		or.lps[grant.Granter] = lp
+	}
 
 	return nil
 }
@@ -134,7 +206,7 @@ func (or *orderTracker) pullOrders(ctx context.Context, toCheckOrdersCh chan []*
 			}
 			// in "sequencer" mode send the orders directly to be fulfilled,
 			// in other modes, send the orders to be checked for validity
-			if or.fulfillCriteria.FulfillmentMode.Level == config.FulfillmentModeSequencer {
+			if or.validation.FallbackLevel == config.ValidationModeSequencer {
 				or.outputOrdersCh <- orders
 			} else {
 				toCheckOrdersCh <- orders
@@ -162,7 +234,11 @@ func (or *orderTracker) enqueueValidOrders(ctx context.Context, toCheckOrdersCh 
 
 func (or *orderTracker) getValidAndRetryOrders(ctx context.Context, orders []*demandOrder) (validOrders, invalidOrders []*demandOrder) {
 	for _, order := range orders {
-		valid, err := or.fullNodeClient.BlockValidated(ctx, order.blockHeight)
+		expectedValidationLevel := validationLevelP2P
+		if order.settlementValidated {
+			expectedValidationLevel = validationLevelSettlement
+		}
+		valid, err := or.fullNodeClient.BlockValidated(ctx, order.blockHeight, expectedValidationLevel)
 		if err != nil {
 			or.logger.Error("failed to check validation of block", zap.Error(err))
 			continue
@@ -173,10 +249,6 @@ func (or *orderTracker) getValidAndRetryOrders(ctx context.Context, orders []*de
 		}
 		if or.isOrderExpired(order) {
 			or.logger.Debug("order has expired", zap.String("id", order.id))
-			// order has expired, so delete it from the store (it's already deleted from the pool at this point)
-			if err := or.store.DeleteOrder(ctx, order.id); err != nil {
-				or.logger.Error("failed to delete order", zap.Error(err))
-			}
 			continue
 		}
 		or.logger.Debug("order is not valid yet", zap.String("id", order.id))
@@ -194,7 +266,7 @@ func (or *orderTracker) addOrder(orders ...*demandOrder) {
 	// - in mode "sequencer" we send a batch directly to be fulfilled,
 	// and any orders that overflow the batch are added to the pool
 	// - in mode "p2p" and "settlement" all orders are added to the pool
-	if or.fulfillCriteria.FulfillmentMode.Level == config.FulfillmentModeSequencer {
+	if or.validation.FallbackLevel == config.ValidationModeSequencer {
 		var (
 			batchToSend []*demandOrder
 			batchToPool []*demandOrder
@@ -213,91 +285,6 @@ func (or *orderTracker) addOrder(orders ...*demandOrder) {
 	or.pool.addOrder(orders...)
 }
 
-// sync the store with the pool every 30 seconds
-func (or *orderTracker) syncStore(ctx context.Context) {
-	for range time.NewTicker(time.Second * 30).C {
-		poolOrders := or.pool.getOrders()
-		storeOrders, err := or.store.GetOrders(ctx)
-		if err != nil {
-			or.logger.Error("failed to get orders", zap.Error(err))
-			continue
-		}
-		storeGotOrders := make(map[string]struct{}, len(storeOrders))
-		for _, o := range storeOrders {
-			storeGotOrders[o.ID] = struct{}{}
-		}
-
-		toSaveOrders := make([]*store.Order, len(poolOrders))
-
-		for i, o := range poolOrders {
-			if _, ok := storeGotOrders[o.id]; ok {
-				continue
-			}
-			toSaveOrders[i] = &store.Order{
-				ID:            o.id,
-				Amount:        o.amount.String(),
-				Fee:           o.fee.String(),
-				RollappID:     o.rollappId,
-				PacketKey:     o.packetKey,
-				BlockHeight:   o.blockHeight,
-				Status:        store.OrderStatusFulfilling, // always fulfilling status in the pool
-				ValidDeadline: o.validDeadline.Unix(),
-			}
-		}
-		if err := or.store.SaveManyOrders(ctx, toSaveOrders); err != nil {
-			or.logger.Error("failed to save orders", zap.Error(err))
-		}
-	}
-}
-
-// upon startup, load the orders from the store: pending orders and fulfilled orders
-func (or *orderTracker) loadTrackedOrders(ctx context.Context) error {
-	// load fulfilled orders from the database
-	fulfilledOrders, err := or.store.GetOrders(ctx, store.FilterByStatus(store.OrderStatusPendingFinalization))
-	if err != nil {
-		return fmt.Errorf("failed to get fulfilled orders: %w", err)
-	}
-
-	var (
-		countFulfilled int
-		countPending   int
-	)
-
-	or.fomu.Lock()
-	for _, order := range fulfilledOrders {
-		ord, err := fromStoreOrder(order)
-		if err != nil {
-			or.logger.Error("failed to convert order", zap.Error(err))
-			continue
-		}
-		or.fulfilledOrders[order.ID] = ord
-		countFulfilled++
-	}
-	or.fomu.Unlock()
-
-	// load order pending fulfillment from the database
-	pendingOrders, err := or.store.GetOrders(ctx, store.FilterByStatus(store.OrderStatusFulfilling))
-	if err != nil {
-		return fmt.Errorf("failed to get pending orders: %w", err)
-	}
-
-	var orders []*demandOrder
-	for _, order := range pendingOrders {
-		ord, err := fromStoreOrder(order)
-		if err != nil {
-			return fmt.Errorf("failed to convert order: %w", err)
-		}
-		orders = append(orders, ord)
-		countPending++
-	}
-
-	or.pool.addOrder(orders...)
-
-	or.logger.Info("loaded tracked orders", zap.Int("count-pending", countPending), zap.Int("count-fulfilled", countFulfilled))
-
-	return nil
-}
-
 func (or *orderTracker) fulfilledOrdersWorker(ctx context.Context) {
 	for {
 		select {
@@ -314,9 +301,8 @@ func (or *orderTracker) fulfilledOrdersWorker(ctx context.Context) {
 // addFulfilledOrders adds the fulfilled orders to the fulfilledOrders cache, and removes them from the orderPool.
 // It also persists the state to the database.
 func (or *orderTracker) addFulfilledOrders(ctx context.Context, batch *orderBatch) error {
-	storeOrders := make([]*store.Order, len(batch.orders))
 	or.fomu.Lock()
-	for i, order := range batch.orders {
+	for _, order := range batch.orders {
 		if len(order.amount) == 0 {
 			continue
 		}
@@ -324,24 +310,8 @@ func (or *orderTracker) addFulfilledOrders(ctx context.Context, batch *orderBatc
 		or.fulfilledOrders[order.id] = order
 		or.pool.removeOrder(order.id) // just in case it's still in the pool
 
-		storeOrders[i] = &store.Order{
-			ID:            order.id,
-			Fulfiller:     batch.fulfiller,
-			Amount:        order.amount[0].String(),
-			Fee:           order.fee.String(),
-			RollappID:     order.rollappId,
-			PacketKey:     order.packetKey,
-			BlockHeight:   order.blockHeight,
-			Status:        store.OrderStatusPendingFinalization,
-			ValidDeadline: order.validDeadline.Unix(),
-		}
 	}
 	or.fomu.Unlock()
-
-	if err := or.store.SaveManyOrders(ctx, storeOrders); err != nil {
-		return fmt.Errorf("failed to save orders: %w", err)
-	}
-
 	return nil
 }
 
@@ -354,27 +324,76 @@ func (or *orderTracker) canFulfillOrder(order *demandOrder) bool {
 		return false
 	}
 
-	if !or.checkFeePercentage(order) {
-		return false
-	}
-
 	return true
 }
 
-func (or *orderTracker) checkFeePercentage(order *demandOrder) bool {
-	assetMinPercentage, ok := or.fulfillCriteria.MinFeePercentage.Asset[strings.ToLower(order.denom)]
-	if !ok {
-		return false
+func (or *orderTracker) findLPForOrder(order *demandOrder) (*lp, error) {
+	or.lpmu.Lock()
+	defer or.lpmu.Unlock()
+
+	lps := or.filterLPsForOrder(order)
+	if len(lps) == 0 {
+		return nil, fmt.Errorf("no LPs found for order")
 	}
 
-	chainMinPercentage, ok := or.fulfillCriteria.MinFeePercentage.Chain[order.rollappId]
-	if !ok {
-		return false
+	bestLP := selectBestLP(lps)
+	if bestLP == nil {
+		return nil, fmt.Errorf("LP not found")
 	}
 
-	feePercentage := order.feePercentage()
-	okFee := feePercentage >= assetMinPercentage && feePercentage >= chainMinPercentage
-	return okFee
+	return bestLP, nil
+}
+
+func (or *orderTracker) filterLPsForOrder(order *demandOrder) []lp {
+	lps := make([]lp, 0, len(or.lps))
+	for _, lp := range or.lps {
+		// check the fee is at least the minimum for what the lp wants
+		operatorFee := sdk.NewDecFromInt(order.fee.Amount).Mul(or.minOperatorFeeShare)
+		amountDec := sdk.NewDecFromInt(order.amount[0].Amount.Add(order.fee.Amount))
+		minLPFee := amountDec.Mul(lp.minFeePercentage).RoundInt()
+		lpFee := order.fee.Amount.Sub(operatorFee.RoundInt())
+
+		if lpFee.LT(minLPFee) {
+			continue
+		}
+
+		// check the rollapp is allowed
+		if len(lp.rollapps) > 0 && !lp.rollapps[order.rollappId] {
+			continue
+		}
+
+		// check the denom is allowed
+		if len(lp.denoms) > 0 && !lp.denoms[order.fee.Denom] {
+			continue
+		}
+
+		// check the order price does not exceed the max price
+		if lp.maxPrice.IsAllPositive() {
+			if order.amount.IsAllGT(lp.maxPrice) {
+				continue
+			}
+		}
+
+		lps = append(lps, lp)
+	}
+	return lps
+}
+
+func selectBestLP(lps []lp) *lp {
+	if len(lps) == 0 {
+		return nil
+	}
+
+	sort.Slice(lps, func(i, j int) bool {
+		// first criterion: settlementValidated (false comes before true)
+		if lps[i].settlementValidated != lps[j].settlementValidated {
+			return !lps[i].settlementValidated && lps[j].settlementValidated
+		}
+		// second criterion: higher operatorFeeShare
+		return lps[i].operatorFeeShare.GT(lps[j].operatorFeeShare)
+	})
+
+	return &lps[0]
 }
 
 func (or *orderTracker) isOrderFulfilled(id string) bool {
@@ -387,203 +406,4 @@ func (or *orderTracker) isOrderFulfilled(id string) bool {
 
 func (or *orderTracker) isOrderInPool(id string) bool {
 	return or.pool.hasOrder(id)
-}
-
-// finalizeOrders finalizes the orders after the dispute period has passed. It updates the bot's balances and pending rewards.
-func (or *orderTracker) finalizeOrders(ctx context.Context, res tmtypes.ResultEvent) error {
-	ids := res.Events[finalizedEvent+".order_id"]
-
-	if len(ids) == 0 {
-		return nil
-	}
-
-	for _, id := range ids {
-		if err := or.finalizeOrderWithID(ctx, id, true); err != nil {
-			return fmt.Errorf("failed to finalize order with id %s: %w", id, err)
-		}
-	}
-
-	return nil
-}
-
-func (or *orderTracker) finalizedChecker(ctx context.Context) {
-	ticker := time.NewTicker(or.finalizedCheckerInterval)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			for rollappID := range or.fulfillCriteria.MinFeePercentage.Chain {
-				if err := or.checkIfFinalized(ctx, rollappID); err != nil {
-					or.logger.Error("failed to check if order is finalized", zap.Error(err))
-				}
-			}
-		}
-	}
-}
-
-func (or *orderTracker) checkEventFinalized(ctx context.Context, event tmtypes.ResultEvent) error {
-	rollappIDs := event.Events[stateInfoEvent+".rollapp_id"]
-	if len(rollappIDs) == 0 {
-		return nil
-	}
-	if err := or.checkIfFinalized(ctx, rollappIDs[0]); err != nil {
-		return fmt.Errorf("failed to finalize orders: %w", err)
-	}
-
-	return nil
-}
-
-func (or *orderTracker) checkIfFinalized(ctx context.Context, rollappID string) error {
-	resp, err := or.getStateInfo(ctx, &types.QueryGetStateInfoRequest{
-		RollappId: rollappID,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to get state info: %w", err)
-	}
-
-	if len(resp.StateInfo.BDs.BD) == 0 {
-		return nil
-	}
-
-	latestHeight := resp.StateInfo.BDs.BD[len(resp.StateInfo.BDs.BD)-1].Height
-
-	if err = or.checkIfLastFinalized(ctx, int64(latestHeight)); err != nil {
-		return fmt.Errorf("failed to check if last order is finalized: %w", err)
-	}
-
-	return nil
-}
-
-func (or *orderTracker) checkIfLastFinalized(ctx context.Context, latestHeight int64) error {
-	or.fomu.Lock()
-	var orderIDsToFinalize []string
-	for id, order := range or.fulfilledOrders {
-		if latestHeight >= order.blockHeight {
-			orderIDsToFinalize = append(orderIDsToFinalize, id)
-		}
-	}
-	or.fomu.Unlock()
-
-	for _, id := range orderIDsToFinalize {
-		if err := or.finalizeOrderWithID(ctx, id, false); err != nil {
-			or.logger.Error("failed to finalize order", zap.Error(err))
-		}
-	}
-
-	return nil
-}
-
-func (or *orderTracker) finalizeOrderWithID(ctx context.Context, id string, finalized bool) error {
-	or.fomu.Lock()
-	defer or.fomu.Unlock()
-
-	_, ok := or.fulfilledOrders[id]
-	if !ok {
-		return nil
-	}
-
-	order, err := or.store.GetOrder(ctx, id)
-	if err != nil {
-		return fmt.Errorf("failed to get order: %w", err)
-	}
-
-	b, err := or.store.GetBot(ctx, order.Fulfiller)
-	if err != nil {
-		return fmt.Errorf("failed to get bot: %w", err)
-	}
-
-	if !finalized {
-		if err = or.finalizeHubOrders(ctx, b.Name, order); err != nil {
-			return fmt.Errorf("failed to finalize order: %w", err)
-		}
-	}
-
-	orderAmount, err := sdk.ParseCoinNormalized(order.Amount)
-	if err != nil {
-		return fmt.Errorf("failed to parse order amount: %w", err)
-	}
-
-	fee, err := sdk.ParseCoinNormalized(order.Fee)
-	if err != nil {
-		return fmt.Errorf("failed to parse order fee: %w", err)
-	}
-
-	// earnings from fees
-	pendingEarnings, err := sdk.ParseCoinsNormalized(strings.Join(b.PendingEarnings, ","))
-	if err != nil {
-		return fmt.Errorf("failed to parse pending fees: %w", err)
-	}
-
-	// got balances
-	balances, err := sdk.ParseCoinsNormalized(strings.Join(b.Balances, ","))
-	if err != nil {
-		return fmt.Errorf("failed to parse balances: %w", err)
-	}
-
-	// fees turn profits after finalization
-	claimableEarnings, err := sdk.ParseCoinsNormalized(strings.Join(b.ClaimableEarnings, ","))
-	if err != nil {
-		return fmt.Errorf("failed to parse claimable earnings: %w", err)
-	}
-
-	if pendingEarnings.IsAnyGTE(sdk.NewCoins(fee)) {
-		// subtract the order fee from the pending earnings
-		pendingEarnings = pendingEarnings.Sub(fee)
-		b.PendingEarnings = store.CoinsToStrings(pendingEarnings)
-
-		// add the order fee to the claimable earnings
-		claimableEarnings = claimableEarnings.Add(fee)
-		b.ClaimableEarnings = store.CoinsToStrings(claimableEarnings)
-
-		// add the order amount back to the balances
-		balances = balances.Add(orderAmount)
-		b.Balances = store.CoinsToStrings(balances)
-		or.bots[b.Name].accountSvc.SetBalances(balances)
-	}
-
-	if err := or.store.SaveBot(ctx, b); err != nil {
-		return fmt.Errorf("failed to update bot: %w", err)
-	}
-
-	if err := or.store.DeleteOrder(ctx, id); err != nil {
-		return fmt.Errorf("failed to delete order: %w", err)
-	}
-
-	delete(or.fulfilledOrders, id)
-
-	or.logger.Info("finalized order", zap.String("id", id))
-
-	return nil
-}
-
-func (or *orderTracker) finalizeHubOrders(ctx context.Context, ownerName string, orders ...*store.Order) error {
-	asvc := or.bots[ownerName].accountSvc
-	// ensure fees
-	_, err := asvc.EnsureBalances(ctx, sdk.Coins{})
-	if err != nil {
-		return fmt.Errorf("failed to ensure balances: %w", err)
-	}
-
-	msgs := make([]sdk.Msg, len(orders))
-
-	for i, order := range orders {
-		msgs[i] = &types.MsgFinalizePacketByPacketKey{
-			Sender:    order.Fulfiller,
-			PacketKey: order.PacketKey,
-		}
-	}
-
-	rsp, err := or.broadcastTx(ownerName, msgs...)
-	if err != nil {
-		return fmt.Errorf("failed to broadcast tx: %w", err)
-	}
-
-	if err = asvc.WaitForTx(rsp.TxHash); err != nil {
-		return fmt.Errorf("failed to wait for tx: %w", err)
-	}
-
-	or.logger.Debug("finalized orders", zap.String("response", rsp.String()))
-
-	return nil
 }

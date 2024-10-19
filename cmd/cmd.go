@@ -14,11 +14,8 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/dymensionxyz/eibc-client/api"
-	"github.com/dymensionxyz/eibc-client/api/handlers"
 	"github.com/dymensionxyz/eibc-client/config"
 	"github.com/dymensionxyz/eibc-client/eibc"
-	"github.com/dymensionxyz/eibc-client/store"
 	utils "github.com/dymensionxyz/eibc-client/utils/viper"
 	"github.com/dymensionxyz/eibc-client/version"
 )
@@ -47,10 +44,10 @@ var initCmd = &cobra.Command{
 			log.Fatalf("failed to unmarshal config: %v", err)
 		}
 
-		// if home dir doesn't exist, create it
-		if _, err := os.Stat(cfg.HomeDir); os.IsNotExist(err) {
-			if err := os.MkdirAll(cfg.HomeDir, 0o755); err != nil {
-				log.Fatalf("failed to create home directory: %v", err)
+		// if bot key dir doesn't exist, create it
+		if _, err := os.Stat(cfg.Bots.KeyringDir); os.IsNotExist(err) {
+			if err := os.MkdirAll(cfg.Bots.KeyringDir, 0o755); err != nil {
+				log.Fatalf("failed to create bot key directory: %v", err)
 			}
 		}
 
@@ -80,8 +77,8 @@ var startCmd = &cobra.Command{
 			log.Fatalf("failed to unmarshal config: %v", err)
 		}
 
-		if !cfg.FulfillCriteria.FulfillmentMode.Level.Validate() {
-			log.Fatalf("invalid fulfillment mode: %s", cfg.FulfillCriteria.FulfillmentMode.Level)
+		if !cfg.Validation.FallbackLevel.Validate() {
+			log.Fatalf("invalid fallback validation level: %s", cfg.Validation.FallbackLevel)
 		}
 
 		log.Printf("using config file: %+v", viper.ConfigFileUsed())
@@ -94,7 +91,7 @@ var startCmd = &cobra.Command{
 		// Ensure all logs are written
 		defer logger.Sync() // nolint: errcheck
 
-		oc, err := eibc.NewOrderClient(cmd.Context(), cfg, logger)
+		oc, err := eibc.NewOrderClient(cfg, logger)
 		if err != nil {
 			log.Fatalf("failed to create order client: %v", err)
 		}
@@ -104,15 +101,9 @@ var startCmd = &cobra.Command{
 			return
 		}
 
-		bh := handlers.NewBotHandler(oc.GetBotStore())
-		wh := handlers.NewWhaleHandler(oc.GetWhale().GetBalanceThresholds(), oc.GetWhale().GetAccountSvc())
-
 		if err := oc.Start(cmd.Context()); err != nil {
 			log.Fatalf("failed to start order client: %v", err)
 		}
-
-		server := api.NewServer(bh, wh, cfg.ServerAddress, logger)
-		server.Start()
 	},
 }
 
@@ -132,157 +123,6 @@ func buildLogger(logLevel string) (*zap.Logger, error) {
 	))
 
 	return logger, nil
-}
-
-var balancesCmd = &cobra.Command{
-	Use:   "funds",
-	Short: "Get account funds",
-	Long:  `Get account balances and pending rewards for the configured whale account and the bot accounts.`,
-	Run: func(cmd *cobra.Command, args []string) {
-		viper.AutomaticEnv()
-
-		if err := viper.ReadInConfig(); err == nil {
-			fmt.Println("Using config file:", viper.ConfigFileUsed())
-		}
-
-		cfg := config.Config{}
-		if err := viper.Unmarshal(&cfg); err != nil {
-			log.Fatalf("failed to unmarshal config: %v", err)
-		}
-
-		cfg.SkipRefund = true
-
-		logger, err := buildLogger(cfg.LogLevel)
-		if err != nil {
-			log.Fatalf("failed to build logger: %v", err)
-		}
-
-		// Ensure all logs are written
-		defer logger.Sync() // nolint: errcheck
-
-		oc, err := eibc.NewOrderClient(cmd.Context(), cfg, logger)
-		if err != nil {
-			log.Fatalf("failed to create order client: %v", err)
-		}
-
-		defer oc.Stop()
-
-		whaleAccSvc := oc.GetWhale().GetAccountSvc()
-
-		if err := whaleAccSvc.RefreshBalances(cmd.Context()); err != nil {
-			log.Fatalf("failed to refresh whale account balances: %v", err)
-		}
-
-		longestAmountStr := 0
-
-		for _, bal := range whaleAccSvc.GetBalances() {
-			amtStr := formatAmount(bal.Amount.String())
-			if len(amtStr) > longestAmountStr {
-				longestAmountStr = len(amtStr)
-			}
-		}
-
-		fmt.Println()
-		fmt.Println("Bots Funds:")
-
-		bots, err := oc.GetBotStore().GetBots(cmd.Context(), store.OnlyWithFunds())
-		if err != nil {
-			log.Fatalf("failed to get bots from db: %v", err)
-		}
-
-		for _, b := range bots {
-			balances, err := sdk.ParseCoinsNormalized(strings.Join(b.Balances, ","))
-			if err != nil {
-				log.Fatalf("failed to parse balance: %v", err)
-			}
-
-			pendingRewards, err := sdk.ParseCoinsNormalized(strings.Join(b.PendingEarnings, ","))
-			if err != nil {
-				log.Fatalf("failed to parse pending rewards: %v", err)
-			}
-
-			for _, bal := range balances {
-				if len(bal.Amount.String()) > longestAmountStr {
-					longestAmountStr = len(bal.Amount.String())
-				}
-			}
-
-			for _, pr := range pendingRewards {
-				if len(pr.Amount.String()) > longestAmountStr {
-					longestAmountStr = len(pr.Amount.String())
-				}
-			}
-		}
-
-		maxDen := 68
-
-		dividerItem := ""
-		dividerFunds := ""
-
-		for i := 0; i < longestAmountStr+maxDen+3; i++ {
-			dividerItem += "="
-			dividerFunds += "-"
-		}
-
-		totalBalances := sdk.NewCoins(whaleAccSvc.GetBalances()...)
-		totalPendingRewards := sdk.NewCoins()
-
-		i := 0
-		for _, b := range bots {
-			i++
-
-			balances, err := sdk.ParseCoinsNormalized(strings.Join(b.Balances, ","))
-			if err != nil {
-				log.Fatalf("failed to parse balance: %v", err)
-			}
-
-			pendingRewards, err := sdk.ParseCoinsNormalized(strings.Join(b.PendingEarnings, ","))
-			if err != nil {
-				log.Fatalf("failed to parse pending rewards: %v", err)
-			}
-
-			totalBalances = totalBalances.Add(balances...)
-			totalPendingRewards = totalPendingRewards.Add(pendingRewards...)
-
-			if !balances.IsZero() {
-				accPref := fmt.Sprintf("%d. | '%s': ", i, b.Name)
-				printAccountSlot(b.Address, accPref, dividerItem)
-				fmt.Println("Balances:")
-				printBalances(balances, longestAmountStr, maxDen)
-				fmt.Println()
-			}
-
-			if !pendingRewards.IsZero() {
-				fmt.Println("Pending Rewards:")
-				fmt.Println(dividerFunds)
-				printBalances(pendingRewards, longestAmountStr, maxDen)
-			}
-		}
-
-		fmt.Println()
-		fmt.Println("Whale Balances:")
-
-		if !whaleAccSvc.GetBalances().IsZero() {
-			accPref := fmt.Sprintf("Whale | '%s': ", whaleAccSvc.GetAccountName())
-			printAccountSlot(
-				whaleAccSvc.Address(),
-				accPref,
-				dividerItem,
-			)
-			printBalances(whaleAccSvc.GetBalances(), longestAmountStr, maxDen)
-			fmt.Println()
-		}
-
-		fmt.Println()
-		fmt.Println("Total:")
-		fmt.Println(dividerItem)
-		fmt.Println("Balances:")
-		printBalances(totalBalances, longestAmountStr, maxDen)
-
-		fmt.Println(dividerFunds)
-		fmt.Println("Pending Rewards:")
-		printBalances(totalPendingRewards, longestAmountStr, maxDen)
-	},
 }
 
 var scaleCmd = &cobra.Command{
@@ -380,9 +220,6 @@ func init() {
 	RootCmd.AddCommand(initCmd)
 	RootCmd.AddCommand(startCmd)
 	RootCmd.AddCommand(scaleCmd)
-
-	balancesCmd.Flags().BoolP("all", "a", false, "Filter by fulfillment status")
-	RootCmd.AddCommand(balancesCmd)
 
 	RootCmd.AddCommand(versionCmd)
 

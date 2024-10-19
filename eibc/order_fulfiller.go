@@ -2,20 +2,26 @@ package eibc
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"slices"
+	"strings"
 
 	"github.com/cosmos/cosmos-sdk/client"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/dymensionxyz/cosmosclient/cosmosclient"
+	"github.com/cosmos/cosmos-sdk/types/bech32"
+	"github.com/cosmos/cosmos-sdk/x/authz"
 	"go.uber.org/zap"
+
+	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 
 	"github.com/dymensionxyz/eibc-client/config"
 	"github.com/dymensionxyz/eibc-client/types"
 )
 
 type orderFulfiller struct {
-	accountSvc          AccountSvc
+	account             account
+	policyAddress       string
+	operatorAddress     string
 	client              cosmosClient
 	logger              *zap.Logger
 	FulfillDemandOrders func(demandOrder ...*demandOrder) error
@@ -29,79 +35,58 @@ type cosmosClient interface {
 	Context() client.Context
 }
 
-type AccountSvc interface {
-	Address() string
-	GetAccountName() string
-	GetBalances() sdk.Coins
-	SetBalances(sdk.Coins)
-	EnsureBalances(ctx context.Context, coins sdk.Coins) ([]string, error)
-	SendCoins(ctx context.Context, coins sdk.Coins, toAddrStr string) error
-	GetAccountBalances(ctx context.Context) (sdk.Coins, error)
-	UpdateFunds(ctx context.Context, opts ...fundsOption) error
-	BalanceOf(denom string) sdk.Int
-	WaitForTx(txHash string) error
-	RefreshBalances(ctx context.Context) error
-}
-
 func newOrderFulfiller(
-	accountSvc AccountSvc,
 	newOrdersCh chan []*demandOrder,
 	fulfilledOrdersCh chan<- *orderBatch,
 	client cosmosClient,
+	acc account,
+	policyAddress string,
+	operatorAddress string,
 	logger *zap.Logger,
 ) *orderFulfiller {
 	o := &orderFulfiller{
-		accountSvc:        accountSvc,
+		account:           acc,
+		policyAddress:     policyAddress,
+		operatorAddress:   operatorAddress,
 		client:            client,
 		fulfilledOrdersCh: fulfilledOrdersCh,
 		newOrdersCh:       newOrdersCh,
 		logger: logger.With(zap.String("module", "order-fulfiller"),
-			zap.String("name", accountSvc.GetAccountName()), zap.String("address", accountSvc.Address())),
+			zap.String("bot-name", acc.Name), zap.String("address", acc.Address)),
 	}
-	o.FulfillDemandOrders = o.fulfillDemandOrders
+	o.FulfillDemandOrders = o.fulfillAuthorizedDemandOrders
 	return o
 }
 
 // add command that creates all the bots to be used?
 
 func buildBot(
-	name string,
+	acc account,
+	operatorAddress string,
 	logger *zap.Logger,
 	cfg config.BotConfig,
 	clientCfg config.ClientConfig,
-	store accountStore,
-	minimumGasBalance sdk.Coin,
 	newOrderCh chan []*demandOrder,
 	fulfilledCh chan *orderBatch,
-	topUpCh chan topUpRequest,
 ) (*orderFulfiller, error) {
 	cosmosClient, err := cosmosclient.New(config.GetCosmosClientOptions(clientCfg)...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cosmos client for bot: %s;err: %w", name, err)
+		return nil, fmt.Errorf("failed to create cosmos client for bot: %s;err: %w", acc.Name, err)
 	}
 
-	as, err := newAccountService(
+	return newOrderFulfiller(
+		newOrderCh,
+		fulfilledCh,
 		cosmosClient,
-		store,
+		acc,
+		cfg.PolicyAddress,
+		operatorAddress,
 		logger,
-		name,
-		minimumGasBalance,
-		topUpCh,
-		withTopUpFactor(cfg.TopUpFactor),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create account service for bot: %s;err: %w", name, err)
-	}
-
-	return newOrderFulfiller(as, newOrderCh, fulfilledCh, cosmosClient, logger), nil
+	), nil
 }
 
 func (ol *orderFulfiller) start(ctx context.Context) error {
-	if err := ol.accountSvc.UpdateFunds(ctx); err != nil {
-		return fmt.Errorf("failed to update account funds: %w", err)
-	}
-
-	ol.logger.Info("starting fulfiller...", zap.String("balances", ol.accountSvc.GetBalances().String()))
+	ol.logger.Info("starting fulfiller...")
 
 	ol.fulfillOrders(ctx)
 	return nil
@@ -113,114 +98,138 @@ func (ol *orderFulfiller) fulfillOrders(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case orders := <-ol.newOrdersCh:
-			if err := ol.processBatch(ctx, orders); err != nil {
+			if err := ol.processBatch(orders); err != nil {
 				ol.logger.Error("failed to process batch", zap.Error(err))
 			}
 		}
 	}
 }
 
-func (ol *orderFulfiller) processBatch(ctx context.Context, batch []*demandOrder) error {
-	var (
-		ids          []string
-		demandOrders []*demandOrder
-	)
-
-	coins := sdk.NewCoins()
-
-	for _, order := range batch {
-		coins = coins.Add(order.amount...)
-		coins = coins.Sub(order.fee...)
-	}
-
-	ol.logger.Debug("ensuring balances for orders")
-
-	ensuredDenoms, err := ol.accountSvc.EnsureBalances(ctx, coins)
-	if err != nil {
-		return fmt.Errorf("failed to ensure balances: %w", err)
-	}
-
-	if len(ensuredDenoms) > 0 {
-		ol.logger.Info("ensured balances for orders", zap.Strings("denoms", ensuredDenoms))
-	}
-
-	leftoverBatch := make([]string, 0, len(batch))
-	demandOrders = make([]*demandOrder, 0, len(batch))
-
-outer:
-	for _, order := range batch {
-		for _, price := range order.amount {
-			if !slices.Contains(ensuredDenoms, price.Denom) {
-				leftoverBatch = append(leftoverBatch, order.id)
-				continue outer
-			}
-
-			ids = append(ids, order.id)
-			demandOrders = append(demandOrders, order)
-		}
-	}
-
-	if len(ids) == 0 {
-		ol.logger.Debug(
-			"no orders to fulfill",
-			zap.String("bot-name", ol.accountSvc.GetAccountName()),
-			zap.Int("leftover count", len(leftoverBatch)),
-		)
+func (ol *orderFulfiller) processBatch(batch []*demandOrder) error {
+	if len(batch) == 0 {
+		ol.logger.Debug("no orders to fulfill")
 		return nil
 	}
 
-	ol.logger.Info("fulfilling orders", zap.Int("count", len(ids)))
+	var ids []string
+	for _, order := range batch {
+		ids = append(ids, order.id)
+	}
 
-	if err := ol.FulfillDemandOrders(demandOrders...); err != nil {
+	ol.logger.Info("fulfilling orders", zap.Strings("ids", ids))
+
+	if err := ol.FulfillDemandOrders(batch...); err != nil {
 		return fmt.Errorf("failed to fulfill orders: ids: %v; %w", ids, err)
 	}
 
-	ol.logger.Info("orders fulfilled", zap.Int("count", len(ids)))
+	ol.logger.Info("orders fulfilled", zap.Strings("ids", ids))
 
 	go func() {
 		if len(ids) == 0 {
 			return
 		}
 
-		fees := sdk.Coins{}
-
-		for _, order := range batch {
-			if slices.Contains(ids, order.id) {
-				fees = fees.Add(order.fee...)
-			}
-		}
-
-		// TODO: check if balances get updated before the new batch starts processing
-		if err := ol.accountSvc.UpdateFunds(ctx, addFeeEarnings(fees)); err != nil {
-			ol.logger.Error("failed to refresh balances", zap.Error(err))
-		}
-
 		ol.fulfilledOrdersCh <- &orderBatch{
-			orders:    demandOrders,
-			fulfiller: ol.accountSvc.Address(),
+			orders:    batch,
+			fulfiller: ol.account.Address, // TODO
 		}
 	}()
 
 	return nil
 }
 
-func (ol *orderFulfiller) fulfillDemandOrders(demandOrder ...*demandOrder) error {
-	msgs := make([]sdk.Msg, len(demandOrder))
+/*
+1. dymd tx eibc fulfill-order-authorized 388cedaafbe9ea05c5b6422970005d4a9cb13b2b679afedb99aa82ccff8784aa 10 --rollapp-id rollappwasme_1235-1 --fulfiller-address dym1s5y26zt0msaypsafujrltq7f0h04zzu0e8q5kr --operator-address dym1qhxedstgx9fv3zmjuj687y6lh5cwm9czhqajhw --price 1000adym --fulfiller-fee-part 0.4 --settlement-validated --from alex --generate-only > tx.json
+2. dymd tx authz exec tx.json --from dym1c799jddmlz7segvg6jrw6w2k6svwafganjdznard3tc74n7td7rqrx4c5e --fees 1dym -y --generate-only > tx_exec.json
+3. dymd tx group submit-proposal proposal.json --from yishay --fees 1dym --exec try --gas auto --fee-granter dym1qhxedstgx9fv3zmjuj687y6lh5cwm9czhqajhw -y
+*/
+func (ol *orderFulfiller) fulfillAuthorizedDemandOrders(demandOrder ...*demandOrder) error {
+	fulfillMsgs := make([]sdk.Msg, len(demandOrder))
 
 	for i, order := range demandOrder {
-		msgs[i] = types.NewMsgFulfillOrder(ol.accountSvc.Address(), order.id, order.feeStr)
+		fulfillMsgs[i] = types.NewMsgFulfillOrderAuthorized(
+			order.id,
+			order.rollappId,
+			order.lpAddress,
+			ol.policyAddress,
+			ol.operatorAddress,
+			order.fee.Amount.String(),
+			order.amount,
+			order.operatorFeePart,
+			order.settlementValidated,
+		)
 	}
 
-	rsp, err := ol.client.BroadcastTx(ol.accountSvc.GetAccountName(), msgs...)
+	// bech32 decode the policy address
+	_, policyAddress, err := bech32.DecodeAndConvert(ol.policyAddress)
+	if err != nil {
+		return fmt.Errorf("failed to decode policy address: %w", err)
+	}
+
+	authzMsg := authz.NewMsgExec(policyAddress, fulfillMsgs)
+
+	proposalMsg, err := types.NewMsgSubmitProposal(
+		ol.policyAddress,
+		[]string{ol.account.Address},
+		[]sdk.Msg{&authzMsg},
+		"== Fulfill Order ==",
+		types.Exec_EXEC_TRY,
+		"fulfill-order-authorized",
+		"fulfill-order-authorized",
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create proposal message: %w", err)
+	}
+
+	rsp, err := ol.client.BroadcastTx(ol.account.Name, proposalMsg)
 	if err != nil {
 		return fmt.Errorf("failed to broadcast tx: %w", err)
 	}
 
 	ol.logger.Info("broadcast tx", zap.String("tx-hash", rsp.TxHash))
 
-	if err = ol.accountSvc.WaitForTx(rsp.TxHash); err != nil {
+	resp, err := waitForTx(ol.client, rsp.TxHash)
+	if err != nil {
 		return fmt.Errorf("failed to wait for tx: %w", err)
 	}
 
+	var presp []proposalResp
+	if err := json.Unmarshal([]byte(resp.TxResponse.RawLog), &presp); err != nil {
+		return fmt.Errorf("failed to unmarshal tx response: %w", err)
+	}
+
+	// hack to extract error from logs
+	for _, p := range presp {
+		for _, ev := range p.Events {
+			if ev.Type == "cosmos.group.v1.EventExec" {
+				for _, attr := range ev.Attributes {
+					if attr.Key == "logs" && strings.Contains(attr.Value, "proposal execution failed") {
+						theErr := ""
+						parts := strings.Split(attr.Value, " : ")
+						if len(parts) > 1 {
+							theErr = parts[1]
+						} else {
+							theErr = attr.Value
+						}
+						return fmt.Errorf("fulfillment failed: %s", theErr)
+					}
+				}
+			}
+		}
+	}
+
+	ol.logger.Info("tx executed", zap.String("tx-hash", rsp.TxHash))
+
 	return nil
+}
+
+type proposalResp struct {
+	MsgIndex int `json:"msg_index"`
+	Events   []struct {
+		Type       string `json:"type"`
+		Attributes []struct {
+			Key   string `json:"key"`
+			Value string `json:"value"`
+		} `json:"attributes"`
+	} `json:"events"`
 }

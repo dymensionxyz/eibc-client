@@ -27,7 +27,6 @@ type orderPoller struct {
 	getOrders    func() ([]Order, error)
 	orderTracker *orderTracker
 	sync.Mutex
-	pathMap map[string]string
 }
 
 func newOrderPoller(
@@ -42,7 +41,6 @@ func newOrderPoller(
 		interval:      pollingCfg.Interval,
 		logger:        logger.With(zap.String("module", "order-poller")),
 		orderTracker:  orderTracker,
-		pathMap:       make(map[string]string),
 		indexerClient: &http.Client{Timeout: 25 * time.Second},
 	}
 	o.getOrders = o.getDemandOrdersFromIndexer
@@ -110,15 +108,13 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 			continue
 		}
 
-		fee, err := sdk.ParseCoinsNormalized(order.Fee)
+		fee, err := sdk.ParseCoinNormalized(order.Fee)
 		if err != nil {
 			p.logger.Error("failed to parse fee", zap.Error(err))
 			continue
 		}
 
-		denom := fee.GetDenomByIndex(0)
-
-		amountStr := fmt.Sprintf("%s%s", order.Amount, denom)
+		amountStr := fmt.Sprintf("%s%s", order.Amount, fee.Denom)
 		amount, err := sdk.ParseCoinsNormalized(amountStr)
 		if err != nil {
 			p.logger.Error("failed to parse amount", zap.Error(err))
@@ -134,14 +130,14 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 			}
 		}
 
-		validationWaitTime := p.orderTracker.fulfillCriteria.FulfillmentMode.ValidationWaitTime
+		validationWaitTime := p.orderTracker.validation.ValidationWaitTime
 		validDeadline := time.Now().Add(validationWaitTime)
 
 		newOrder := &demandOrder{
 			id:            order.EibcOrderId,
 			amount:        amount,
 			fee:           fee,
-			denom:         denom,
+			denom:         fee.Denom,
 			rollappId:     order.RollappId,
 			packetKey:     order.PacketKey,
 			blockHeight:   blockHeight,
@@ -151,6 +147,21 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 		if !p.orderTracker.canFulfillOrder(newOrder) {
 			continue
 		}
+
+		lp, err := p.orderTracker.findLPForOrder(newOrder)
+		if err != nil {
+			p.logger.Error("failed to find LP for order", zap.Error(err))
+			continue
+		}
+
+		if lp == nil {
+			p.logger.Error("failed to find LP for order")
+			continue
+		}
+
+		newOrder.lpAddress = lp.address
+		newOrder.settlementValidated = lp.settlementValidated
+		newOrder.operatorFeePart = lp.operatorFeeShare
 
 		orders = append(orders, newOrder)
 	}

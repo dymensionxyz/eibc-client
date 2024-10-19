@@ -13,11 +13,14 @@ import (
 	"github.com/dymensionxyz/eibc-client/config"
 )
 
+/*
+// TODO: test LP election
+
 func Test_orderTracker_canFulfillOrder(t *testing.T) {
 	type fields struct {
 		currentOrders   map[string]*demandOrder
 		trackedOrders   map[string]*demandOrder
-		fulfillCriteria *config.FulfillCriteria
+		fulfillCriteria *config.ValidationConfig
 	}
 	type args struct {
 		order *demandOrder
@@ -31,7 +34,7 @@ func Test_orderTracker_canFulfillOrder(t *testing.T) {
 		{
 			name: "can fulfill order",
 			fields: fields{
-				fulfillCriteria: &config.FulfillCriteria{
+				fulfillCriteria: &config.ValidationConfig{
 					MinFeePercentage: sampleMinFeePercentage,
 				},
 			},
@@ -45,7 +48,7 @@ func Test_orderTracker_canFulfillOrder(t *testing.T) {
 				trackedOrders: map[string]*demandOrder{
 					sampleDemandOrder.id: sampleDemandOrder,
 				},
-				fulfillCriteria: &config.FulfillCriteria{
+				fulfillCriteria: &config.ValidationConfig{
 					MinFeePercentage: sampleMinFeePercentage,
 				},
 			},
@@ -59,7 +62,7 @@ func Test_orderTracker_canFulfillOrder(t *testing.T) {
 				currentOrders: map[string]*demandOrder{
 					sampleDemandOrder.id: sampleDemandOrder,
 				},
-				fulfillCriteria: &config.FulfillCriteria{
+				fulfillCriteria: &config.ValidationConfig{
 					MinFeePercentage: sampleMinFeePercentage,
 				},
 			},
@@ -70,7 +73,7 @@ func Test_orderTracker_canFulfillOrder(t *testing.T) {
 		}, {
 			name: "cannot fulfill order: asset fee percentage is lower than minimum",
 			fields: fields{
-				fulfillCriteria: &config.FulfillCriteria{
+				fulfillCriteria: &config.ValidationConfig{
 					MinFeePercentage: config.MinFeePercentage{
 						Asset: map[string]float32{
 							sampleDemandOrder.denom: 0.2,
@@ -88,7 +91,7 @@ func Test_orderTracker_canFulfillOrder(t *testing.T) {
 		}, {
 			name: "cannot fulfill order: chain fee percentage is lower than minimum",
 			fields: fields{
-				fulfillCriteria: &config.FulfillCriteria{
+				fulfillCriteria: &config.ValidationConfig{
 					MinFeePercentage: config.MinFeePercentage{
 						Asset: map[string]float32{
 							sampleDemandOrder.denom: 0.1,
@@ -110,7 +113,7 @@ func Test_orderTracker_canFulfillOrder(t *testing.T) {
 			or := &orderTracker{
 				pool:            orderPool{orders: tt.fields.currentOrders},
 				fulfilledOrders: tt.fields.trackedOrders,
-				fulfillCriteria: tt.fields.fulfillCriteria,
+				validation:      tt.fields.fulfillCriteria,
 			}
 			if or.pool.orders == nil {
 				or.pool.orders = make(map[string]*demandOrder)
@@ -124,17 +127,9 @@ func Test_orderTracker_canFulfillOrder(t *testing.T) {
 		})
 	}
 }
+*/
 
 var (
-	sampleMinFeePercentage = config.MinFeePercentage{
-		Asset: map[string]float32{
-			sampleDemandOrder.denom: 0.1,
-		},
-		Chain: map[string]float32{
-			sampleDemandOrder.rollappId: 0.1,
-		},
-	}
-
 	sampleDemandOrder = &demandOrder{
 		id:        "order1",
 		amount:    amount,
@@ -144,50 +139,50 @@ var (
 	}
 
 	amount, _ = sdk.ParseCoinsNormalized("10526097010000000000denom")
-	fee, _    = sdk.ParseCoinsNormalized("15789145514999998denom")
+	fee, _    = sdk.ParseCoinNormalized("15789145514999998denom")
 )
 
 func Test_worker_sequencerMode(t *testing.T) {
 	tests := []struct {
-		name             string
-		fullNodeClient   *nodeClient
-		fulfillmentLevel config.FulfillmentLevel
-		batchSize        int
-		orderDeadline    time.Time
-		orderIDs         []string
-		expectedOrderIDs []string
+		name                    string
+		fullNodeClient          *nodeClient
+		fulfillmentLevel        config.ValidationLevel
+		batchSize               int
+		orderDeadline           time.Time
+		orderIDs                []string
+		expectedOrderIDs        []string
+		expectedValidationLevel validationLevel
 	}{
 		{
 			name:             "fulfill orders in sequencer mode",
-			fulfillmentLevel: config.FulfillmentModeSequencer,
+			fulfillmentLevel: config.ValidationModeSequencer,
 			batchSize:        10,
 			orderIDs:         generateOrderIDs(10),
 			expectedOrderIDs: generateOrderIDs(10),
 		}, {
 			name:             "fulfill orders in sequencer mode: batshize smaller than order count",
-			fulfillmentLevel: config.FulfillmentModeSequencer,
+			fulfillmentLevel: config.ValidationModeSequencer,
 			batchSize:        7,
 			orderIDs:         generateOrderIDs(10),
 			expectedOrderIDs: generateOrderIDs(10),
 		}, {
 			name:             "fulfill orders in sequencer mode: batshize bigger than order count",
-			fulfillmentLevel: config.FulfillmentModeSequencer,
+			fulfillmentLevel: config.ValidationModeSequencer,
 			batchSize:        11,
 			orderIDs:         generateOrderIDs(10),
 			expectedOrderIDs: generateOrderIDs(10),
 		}, {
 			name:             "fulfill orders in sequencer mode: high order count",
-			fulfillmentLevel: config.FulfillmentModeSequencer,
+			fulfillmentLevel: config.ValidationModeSequencer,
 			batchSize:        7,
 			orderIDs:         generateOrderIDs(100),
 			expectedOrderIDs: generateOrderIDs(100),
 		}, {
 			name:             "fulfill orders in p2p mode",
-			fulfillmentLevel: config.FulfillmentModeP2P,
+			fulfillmentLevel: config.ValidationModeP2P,
 			fullNodeClient: &nodeClient{
-				minimumValidatedNodes:   1,
-				expectedValidationLevel: validationLevelP2P,
-				locations:               []string{"location1"},
+				minimumValidatedNodes: 1,
+				locations:             []string{"location1"},
 				get: mockValidGet(map[string]map[int64]*blockValidatedResponse{
 					"location1": {
 						1:  {Result: validationLevelP2P},
@@ -203,17 +198,17 @@ func Test_worker_sequencerMode(t *testing.T) {
 					},
 				}),
 			},
-			batchSize:        10,
-			orderDeadline:    time.Now().Add(time.Second * 3),
-			orderIDs:         generateOrderIDs(10),
-			expectedOrderIDs: generateOrderIDs(10),
+			batchSize:               10,
+			orderDeadline:           time.Now().Add(time.Second * 3),
+			orderIDs:                generateOrderIDs(10),
+			expectedOrderIDs:        generateOrderIDs(10),
+			expectedValidationLevel: validationLevelP2P,
 		}, {
 			name:             "fulfill orders in p2p mode: invalid blocks 6 and 9",
-			fulfillmentLevel: config.FulfillmentModeP2P,
+			fulfillmentLevel: config.ValidationModeP2P,
 			fullNodeClient: &nodeClient{
-				minimumValidatedNodes:   1,
-				expectedValidationLevel: validationLevelP2P,
-				locations:               []string{"location1"},
+				minimumValidatedNodes: 1,
+				locations:             []string{"location1"},
 				get: mockValidGet(map[string]map[int64]*blockValidatedResponse{
 					"location1": {
 						1:  {Result: validationLevelP2P},
@@ -229,17 +224,17 @@ func Test_worker_sequencerMode(t *testing.T) {
 					},
 				}),
 			},
-			batchSize:        10,
-			orderDeadline:    time.Now().Add(time.Second * 3),
-			orderIDs:         generateOrderIDs(10),
-			expectedOrderIDs: []string{"order1", "order2", "order3", "order4", "order5", "order7", "order8", "order10"},
+			batchSize:               10,
+			orderDeadline:           time.Now().Add(time.Second * 3),
+			orderIDs:                generateOrderIDs(10),
+			expectedOrderIDs:        []string{"order1", "order2", "order3", "order4", "order5", "order7", "order8", "order10"},
+			expectedValidationLevel: validationLevelP2P,
 		}, {
 			name:             "fulfill orders in p2p mode: 2/3 nodes validated",
-			fulfillmentLevel: config.FulfillmentModeP2P,
+			fulfillmentLevel: config.ValidationModeP2P,
 			fullNodeClient: &nodeClient{
-				minimumValidatedNodes:   2,
-				expectedValidationLevel: validationLevelP2P,
-				locations:               []string{"location1", "location2", "location3"},
+				minimumValidatedNodes: 2,
+				locations:             []string{"location1", "location2", "location3"},
 				get: mockValidGet(map[string]map[int64]*blockValidatedResponse{
 					"location1": {
 						1:  {Result: validationLevelP2P},
@@ -279,17 +274,17 @@ func Test_worker_sequencerMode(t *testing.T) {
 					},
 				}),
 			},
-			batchSize:        10,
-			orderDeadline:    time.Now().Add(time.Second * 3),
-			orderIDs:         generateOrderIDs(10),
-			expectedOrderIDs: generateOrderIDs(10),
+			batchSize:               10,
+			orderDeadline:           time.Now().Add(time.Second * 3),
+			orderIDs:                generateOrderIDs(10),
+			expectedOrderIDs:        generateOrderIDs(10),
+			expectedValidationLevel: validationLevelP2P,
 		}, {
 			name:             "fulfill orders in settlement mode: half orders 2/3 validated, other half 1/3 validated",
-			fulfillmentLevel: config.FulfillmentModeSettlement,
+			fulfillmentLevel: config.ValidationModeSettlement,
 			fullNodeClient: &nodeClient{
-				minimumValidatedNodes:   2,
-				expectedValidationLevel: validationLevelSettlement,
-				locations:               []string{"location1", "location2", "location3"},
+				minimumValidatedNodes: 2,
+				locations:             []string{"location1", "location2", "location3"},
 				get: mockValidGet(map[string]map[int64]*blockValidatedResponse{
 					"location1": {
 						1:  {Result: validationLevelSettlement},
@@ -329,26 +324,27 @@ func Test_worker_sequencerMode(t *testing.T) {
 					},
 				}),
 			},
-			batchSize:        10,
-			orderDeadline:    time.Now().Add(time.Second * 3),
-			orderIDs:         generateOrderIDs(10),
-			expectedOrderIDs: generateOrderIDs(5),
+			batchSize:               10,
+			orderDeadline:           time.Now().Add(time.Second * 3),
+			orderIDs:                generateOrderIDs(10),
+			expectedOrderIDs:        generateOrderIDs(5),
+			expectedValidationLevel: validationLevelSettlement,
 		}, {
 			name:             "fulfill orders in p2p mode: orders hit deadline",
-			fulfillmentLevel: config.FulfillmentModeP2P,
+			fulfillmentLevel: config.ValidationModeP2P,
 			fullNodeClient: &nodeClient{
-				minimumValidatedNodes:   1,
-				expectedValidationLevel: validationLevelP2P,
+				minimumValidatedNodes: 1,
 				get: mockValidGet(map[string]map[int64]*blockValidatedResponse{
 					"location1": {
 						1: {Result: validationLevelP2P},
 					},
 				}),
 			},
-			batchSize:        10,
-			orderDeadline:    time.Now().Add(-time.Second * 1),
-			orderIDs:         generateOrderIDs(10),
-			expectedOrderIDs: []string{},
+			batchSize:               10,
+			orderDeadline:           time.Now().Add(-time.Second * 1),
+			orderIDs:                generateOrderIDs(10),
+			expectedOrderIDs:        []string{},
+			expectedValidationLevel: validationLevelP2P,
 		},
 	}
 	for _, tt := range tests {
@@ -358,18 +354,14 @@ func Test_worker_sequencerMode(t *testing.T) {
 
 			ot := &orderTracker{
 				fullNodeClient:  tt.fullNodeClient,
-				store:           &mockStore{},
 				logger:          zap.NewNop(),
 				fulfilledOrders: make(map[string]*demandOrder),
 				validOrdersCh:   make(chan []*demandOrder),
 				outputOrdersCh:  fulfillOrderCh,
 				pool:            orderPool{orders: make(map[string]*demandOrder)},
 				batchSize:       tt.batchSize,
-				fulfillCriteria: &config.FulfillCriteria{
-					MinFeePercentage: sampleMinFeePercentage,
-					FulfillmentMode: config.FulfillmentMode{
-						Level: tt.fulfillmentLevel,
-					},
+				validation: &config.ValidationConfig{
+					FallbackLevel: tt.fulfillmentLevel,
 				},
 			}
 
