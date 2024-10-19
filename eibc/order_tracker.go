@@ -289,7 +289,7 @@ func (or *orderTracker) fulfilledOrdersWorker(ctx context.Context) {
 	for {
 		select {
 		case batch := <-or.fulfilledOrdersCh:
-			if err := or.addFulfilledOrders(ctx, batch); err != nil {
+			if err := or.addFulfilledOrders(batch); err != nil {
 				or.logger.Error("failed to add fulfilled orders", zap.Error(err))
 			}
 		case <-ctx.Done():
@@ -300,7 +300,7 @@ func (or *orderTracker) fulfilledOrdersWorker(ctx context.Context) {
 
 // addFulfilledOrders adds the fulfilled orders to the fulfilledOrders cache, and removes them from the orderPool.
 // It also persists the state to the database.
-func (or *orderTracker) addFulfilledOrders(ctx context.Context, batch *orderBatch) error {
+func (or *orderTracker) addFulfilledOrders(batch *orderBatch) error {
 	or.fomu.Lock()
 	for _, order := range batch.orders {
 		if len(order.amount) == 0 {

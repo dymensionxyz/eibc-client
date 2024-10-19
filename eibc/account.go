@@ -99,17 +99,21 @@ func createBotAccounts(client cosmosclient.Client, count int) (accs []account, e
 	return
 }
 
-func sendCoins(client cosmosClient, coins sdk.Coins, fromName string, fromAddr sdk.AccAddress, toAddrStr string) error {
-	toAddr, err := sdk.AccAddressFromBech32(toAddrStr)
-	if err != nil {
-		return fmt.Errorf("failed to parse address: %w", err)
+func sendCoinsMulti(client cosmosClient, coins sdk.Coins, fromName string, fromAddr sdk.AccAddress, toAddrStr ...string) error {
+	outputs := make([]banktypes.Output, 0, len(toAddrStr))
+	for _, addrStr := range toAddrStr {
+		toAddr, err := sdk.AccAddressFromBech32(addrStr)
+		if err != nil {
+			return fmt.Errorf("failed to parse address: %w", err)
+		}
+		outputs = append(outputs, banktypes.NewOutput(toAddr, coins))
 	}
 
-	msg := banktypes.NewMsgSend(
-		fromAddr,
-		toAddr,
-		coins,
-	)
+	inputCoins, ok := coins.SafeMulInt(sdk.NewInt(int64(len(toAddrStr))))
+	if !ok {
+		return fmt.Errorf("failed to calculate input coins")
+	}
+	msg := banktypes.NewMsgMultiSend([]banktypes.Input{banktypes.NewInput(fromAddr, inputCoins)}, outputs)
 
 	rsp, err := client.BroadcastTx(fromName, msg)
 	if err != nil {
@@ -240,8 +244,8 @@ func addBotsToGroup(operatorName, operatorAddress string, groupID int, client co
 	return nil
 }
 
-func primeAccount(client cosmosClient, fromName string, fromAddr sdk.AccAddress, toAddr string) error {
-	if err := sendCoins(client, sdk.NewCoins(sdk.NewCoin("adym", sdk.NewInt(1))), fromName, fromAddr, toAddr); err != nil {
+func primeAccounts(client cosmosClient, fromName string, fromAddr sdk.AccAddress, toAddr ...string) error {
+	if err := sendCoinsMulti(client, sdk.NewCoins(sdk.NewCoin("adym", sdk.NewInt(1))), fromName, fromAddr, toAddr...); err != nil {
 		return fmt.Errorf("failed to send coins: %w", err)
 	}
 	return nil
@@ -307,16 +311,20 @@ func hasFeeGranted(client cosmosClient, granterAddr, granteeAddr string) (bool, 
 	return false, nil
 }
 
-func addFeeGrantToBot(client cosmosClient, fromName string, granterAddr, granteeAddr sdk.AccAddress) error {
-	msg, err := feegrant.NewMsgGrantAllowance(
-		&feegrant.BasicAllowance{},
-		granterAddr,
-		granteeAddr,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to create fee grant msg: %w", err)
+func addFeeGrantToBot(client cosmosClient, fromName string, granterAddr sdk.AccAddress, granteeAddr ...sdk.AccAddress) error {
+	msgs := make([]sdk.Msg, 0, len(granteeAddr))
+	for _, addr := range granteeAddr {
+		msg, err := feegrant.NewMsgGrantAllowance(
+			&feegrant.BasicAllowance{},
+			granterAddr,
+			addr,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to create fee grant msg: %w", err)
+		}
+		msgs = append(msgs, msg)
 	}
-	rsp, err := client.BroadcastTx(fromName, msg)
+	rsp, err := client.BroadcastTx(fromName, msgs...)
 	if err != nil {
 		return fmt.Errorf("failed to broadcast tx: %w", err)
 	}

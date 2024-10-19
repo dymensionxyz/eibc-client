@@ -17,7 +17,6 @@ type demandOrder struct {
 	amount              sdk.Coins
 	fee                 sdk.Coin
 	rollappId           string
-	packetKey           string
 	status              string
 	blockHeight         int64
 	validDeadline       time.Time

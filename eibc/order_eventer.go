@@ -55,7 +55,7 @@ func (e *orderEventer) start(ctx context.Context) error {
 		return fmt.Errorf("failed to subscribe to pending demand orders: %w", err)
 	}
 
-	go func() {
+	/*go func() {
 		time.Sleep(3 * time.Second)
 
 		res1 := tmtypes.ResultEvent{
@@ -84,7 +84,7 @@ func (e *orderEventer) start(ctx context.Context) error {
 
 		_ = e.enqueueEventOrders(ctx, res1)
 		_ = e.enqueueEventOrders(ctx, res2)
-	}()
+	}()*/
 
 	return nil
 }
@@ -120,7 +120,6 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 	prices := res.Events[createdEvent+".price"]
 	fees := res.Events[createdEvent+".fee"]
 	statuses := res.Events[createdEvent+".packet_status"]
-	packetKeys := res.Events[createdEvent+".packet_key"]
 	rollapps := res.Events[createdEvent+".rollapp_id"]
 	heights := res.Events[createdEvent+".proof_height"]
 	newOrders := make([]*demandOrder, 0, len(ids))
@@ -158,7 +157,6 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 			fee:           fee,
 			status:        statuses[i],
 			rollappId:     rollapps[i],
-			packetKey:     packetKeys[i],
 			blockHeight:   height,
 			validDeadline: validDeadline,
 		}

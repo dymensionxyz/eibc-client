@@ -112,6 +112,8 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 	}
 
 	activeAccs := make([]account, 0, len(accs))
+	granteeAddrs := make([]sdk.AccAddress, 0, len(accs))
+	primeAddrs := make([]string, 0, len(accs))
 
 	var botIdx int
 	for botIdx = range cfg.Bots.NumberOfBots {
@@ -121,10 +123,7 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 			return nil, fmt.Errorf("failed to check if bot account exists: %w", err)
 		}
 		if !exist {
-			logger.Info("creating bot account", zap.String("name", acc.Name), zap.String("address", acc.Address))
-			if err = primeAccount(operatorClient, operatorName, operatorAddress, acc.Address); err != nil {
-				return nil, fmt.Errorf("failed to prime bot account: %w", err)
-			}
+			primeAddrs = append(primeAddrs, acc.Address)
 		}
 
 		hasGrant, err := hasFeeGranted(operatorClient, operatorAddress.String(), acc.Address)
@@ -136,9 +135,7 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 			if err != nil {
 				return nil, fmt.Errorf("failed to decode bot address: %w", err)
 			}
-			if err = addFeeGrantToBot(operatorClient, operatorName, operatorAddress, granteeAddr); err != nil {
-				return nil, fmt.Errorf("failed to add grant to bot: %w", err)
-			}
+			granteeAddrs = append(granteeAddrs, granteeAddr)
 		}
 
 		b, err := buildBot(
@@ -155,6 +152,20 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 		}
 		bots[b.account.Name] = b
 		activeAccs = append(activeAccs, acc)
+	}
+
+	if len(primeAddrs) > 0 {
+		logger.Info("priming bot accounts", zap.Strings("addresses", primeAddrs))
+		if err = primeAccounts(operatorClient, operatorName, operatorAddress, primeAddrs...); err != nil {
+			return nil, fmt.Errorf("failed to prime bot account: %w", err)
+		}
+	}
+
+	if len(granteeAddrs) > 0 {
+		logger.Info("adding fee grant to bot accounts", zap.Strings("addresses", primeAddrs))
+		if err = addFeeGrantToBot(operatorClient, operatorName, operatorAddress, granteeAddrs...); err != nil {
+			return nil, fmt.Errorf("failed to add grant to bot: %w", err)
+		}
 	}
 
 	err = addBotsToGroup(operatorName, operatorAddress.String(), cfg.Operator.GroupID, operatorClient, activeAccs)
@@ -218,8 +229,14 @@ func getFullNodeClients(cfg config.Config) (*nodeClient, error) {
 }
 
 func (oc *orderClient) Start(ctx context.Context) error {
-	oc.logger.Info("starting demand order fetcher...")
+	oc.logger.Info("starting demand order tracker...")
+
+	if err := oc.orderTracker.start(ctx); err != nil {
+		return fmt.Errorf("failed to start order tracker: %w", err)
+	}
+
 	// start order fetcher
+	oc.logger.Info("starting demand order eventer...")
 	if err := oc.orderEventer.start(ctx); err != nil {
 		return fmt.Errorf("failed to subscribe to demand orders: %w", err)
 	}
@@ -239,10 +256,6 @@ func (oc *orderClient) Start(ctx context.Context) error {
 				oc.logger.Error("failed to bot", zap.Error(err))
 			}
 		}()
-	}
-
-	if err := oc.orderTracker.start(ctx); err != nil {
-		return fmt.Errorf("failed to start order tracker: %w", err)
 	}
 
 	<-make(chan bool)
