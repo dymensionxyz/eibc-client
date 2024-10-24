@@ -104,7 +104,6 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 		GasFees:        cfg.Gas.Fees,
 		GasPrices:      cfg.Gas.Prices,
 		FeeGranter:     operatorAddress.String(),
-		FeePayer:       cfg.Bots.PolicyAddress,
 	}
 
 	accs, err := addBotAccounts(cfg.Bots.NumberOfBots, botClientCfg, logger)

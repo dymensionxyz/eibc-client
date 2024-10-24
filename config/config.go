@@ -140,7 +140,6 @@ type ClientConfig struct {
 	GasFees        string
 	GasPrices      string
 	FeeGranter     string
-	FeePayer       string
 	KeyringBackend cosmosaccount.KeyringBackend
 }
 
