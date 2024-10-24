@@ -51,7 +51,7 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 	// create bots
 	bots := make(map[string]*orderFulfiller)
 
-	minOperatorFeeShare, err := sdk.NewDecFromStr(cfg.Bots.MinOperatorFeeShare)
+	minOperatorFeeShare, err := sdk.NewDecFromStr(cfg.Operator.MinFeeShare)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse min operator fee share: %w", err)
 	}
@@ -67,6 +67,7 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 		cfg.Bots.MaxOrdersPerTx,
 		&cfg.Validation,
 		orderCh,
+		cfg.OrderPolling.Interval, // we can use the same interval for order polling and LP balance checking
 		logger,
 	)
 
@@ -146,6 +147,8 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 			botClientCfg,
 			orderCh,
 			fulfilledOrdersCh,
+			ordTracker.releaseAllReservedOrdersFunds,
+			ordTracker.debitAllReservedOrdersFunds,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create bot: %w", err)
@@ -244,7 +247,9 @@ func (oc *orderClient) Start(ctx context.Context) error {
 	// start order polling
 	if oc.orderPoller != nil {
 		oc.logger.Info("starting order polling...")
-		oc.orderPoller.start(ctx)
+		if err := oc.orderPoller.start(ctx); err != nil {
+			return fmt.Errorf("failed to start order polling: %w", err)
+		}
 	}
 
 	oc.logger.Info("starting bots...")

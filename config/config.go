@@ -12,11 +12,9 @@ import (
 )
 
 type Config struct {
-	ServerAddress string             `mapstructure:"server_address"`
-	NodeAddress   string             `mapstructure:"node_address"`
-	DBPath        string             `mapstructure:"db_path"`
-	Gas           GasConfig          `mapstructure:"gas"`
-	OrderPolling  OrderPollingConfig `mapstructure:"order_polling"`
+	NodeAddress  string             `mapstructure:"node_address"`
+	Gas          GasConfig          `mapstructure:"gas"`
+	OrderPolling OrderPollingConfig `mapstructure:"order_polling"`
 
 	Operator   OperatorConfig   `mapstructure:"operator"`
 	Bots       BotConfig        `mapstructure:"bots"`
@@ -37,13 +35,12 @@ type GasConfig struct {
 }
 
 type BotConfig struct {
-	NumberOfBots        int                          `mapstructure:"number_of_bots"`
-	OperatorAddress     string                       `mapstructure:"operator_address"`
-	PolicyAddress       string                       `mapstructure:"policy_address"`
-	MinOperatorFeeShare string                       `mapstructure:"min_operator_fee_share"`
-	KeyringBackend      cosmosaccount.KeyringBackend `mapstructure:"keyring_backend"`
-	KeyringDir          string                       `mapstructure:"keyring_dir"`
-	MaxOrdersPerTx      int                          `mapstructure:"max_orders_per_tx"`
+	NumberOfBots    int                          `mapstructure:"number_of_bots"`
+	OperatorAddress string                       `mapstructure:"operator_address"`
+	PolicyAddress   string                       `mapstructure:"policy_address"`
+	KeyringBackend  cosmosaccount.KeyringBackend `mapstructure:"keyring_backend"`
+	KeyringDir      string                       `mapstructure:"keyring_dir"`
+	MaxOrdersPerTx  int                          `mapstructure:"max_orders_per_tx"`
 }
 
 type OperatorConfig struct {
@@ -51,6 +48,7 @@ type OperatorConfig struct {
 	KeyringBackend cosmosaccount.KeyringBackend `mapstructure:"keyring_backend"`
 	KeyringDir     string                       `mapstructure:"keyring_dir"`
 	GroupID        int                          `mapstructure:"group_id"`
+	MinFeeShare    string                       `mapstructure:"min_fee_share"`
 }
 
 type ValidationConfig struct {

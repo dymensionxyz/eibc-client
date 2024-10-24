@@ -18,7 +18,7 @@ type demandOrder struct {
 	fee                 sdk.Coin
 	rollappId           string
 	status              string
-	blockHeight         int64
+	proofHeight         int64
 	validDeadline       time.Time
 	settlementValidated bool
 	operatorFeePart     sdk.Dec

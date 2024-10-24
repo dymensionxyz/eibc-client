@@ -9,18 +9,17 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/x/authz"
+	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	"github.com/cosmos/gogoproto/proto"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
-
-	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 
 	"github.com/dymensionxyz/eibc-client/config"
 	"github.com/dymensionxyz/eibc-client/types"
 )
 
 type orderTracker struct {
-	broadcastTx    broadcastTxFn
+	getBalances    getSpendableBalancesFn
 	getLPGrants    getLPGrantsFn
 	fullNodeClient *nodeClient
 	logger         *zap.Logger
@@ -32,39 +31,25 @@ type orderTracker struct {
 	fulfilledOrders     map[string]*demandOrder
 	validOrdersCh       chan []*demandOrder
 	outputOrdersCh      chan<- []*demandOrder
-	lps                 map[string]lp
+	lps                 map[string]*lp
 	minOperatorFeeShare sdk.Dec
 
 	pool orderPool
 
-	batchSize                int
-	finalizedCheckerInterval time.Duration
-	validation               *config.ValidationConfig
-	fulfilledOrdersCh        chan *orderBatch
-	subscriberID             string
+	batchSize              int
+	validation             *config.ValidationConfig
+	fulfilledOrdersCh      chan *orderBatch
+	subscriberID           string
+	balanceRefreshInterval time.Duration
 }
-
-type lp struct {
-	address             string
-	rollapps            map[string]bool
-	denoms              map[string]bool
-	maxPrice            sdk.Coins
-	minFeePercentage    sdk.Dec
-	operatorFeeShare    sdk.Dec
-	settlementValidated bool
-}
-
-const (
-	defaultFinalizedCheckerInterval = 10 * time.Minute
-)
 
 type (
-	broadcastTxFn func(accName string, msgs ...sdk.Msg) (cosmosclient.Response, error)
-	getLPGrantsFn func(ctx context.Context, in *authz.QueryGranteeGrantsRequest, opts ...grpc.CallOption) (*authz.QueryGranteeGrantsResponse, error)
+	getSpendableBalancesFn func(ctx context.Context, in *banktypes.QuerySpendableBalancesRequest, opts ...grpc.CallOption) (*banktypes.QuerySpendableBalancesResponse, error)
+	getLPGrantsFn          func(ctx context.Context, in *authz.QueryGranteeGrantsRequest, opts ...grpc.CallOption) (*authz.QueryGranteeGrantsResponse, error)
 )
 
 func newOrderTracker(
-	hubClient cosmosclient.Client,
+	hubClient cosmosClient,
 	policyAddress string,
 	minOperatorFeeShare sdk.Dec,
 	fullNodeClient *nodeClient,
@@ -74,27 +59,29 @@ func newOrderTracker(
 	batchSize int,
 	validation *config.ValidationConfig,
 	ordersCh chan<- []*demandOrder,
+	balanceRefreshInterval time.Duration,
 	logger *zap.Logger,
 ) *orderTracker {
 	azc := authz.NewQueryClient(hubClient.Context())
+	bc := banktypes.NewQueryClient(hubClient.Context())
 	return &orderTracker{
-		broadcastTx:              hubClient.BroadcastTx,
-		getLPGrants:              azc.GranteeGrants,
-		policyAddress:            policyAddress,
-		minOperatorFeeShare:      minOperatorFeeShare,
-		fullNodeClient:           fullNodeClient,
-		pool:                     orderPool{orders: make(map[string]*demandOrder)},
-		fulfilledOrdersCh:        fulfilledOrdersCh,
-		bots:                     bots,
-		lps:                      make(map[string]lp),
-		batchSize:                batchSize,
-		finalizedCheckerInterval: defaultFinalizedCheckerInterval,
-		validation:               validation,
-		validOrdersCh:            make(chan []*demandOrder),
-		outputOrdersCh:           ordersCh,
-		logger:                   logger.With(zap.String("module", "order-resolver")),
-		subscriberID:             subscriberID,
-		fulfilledOrders:          make(map[string]*demandOrder),
+		getBalances:            bc.SpendableBalances,
+		getLPGrants:            azc.GranteeGrants,
+		policyAddress:          policyAddress,
+		minOperatorFeeShare:    minOperatorFeeShare,
+		fullNodeClient:         fullNodeClient,
+		pool:                   orderPool{orders: make(map[string]*demandOrder)},
+		fulfilledOrdersCh:      fulfilledOrdersCh,
+		bots:                   bots,
+		lps:                    make(map[string]*lp),
+		batchSize:              batchSize,
+		validation:             validation,
+		validOrdersCh:          make(chan []*demandOrder),
+		outputOrdersCh:         ordersCh,
+		logger:                 logger.With(zap.String("module", "order-resolver")),
+		subscriberID:           subscriberID,
+		balanceRefreshInterval: balanceRefreshInterval,
+		fulfilledOrders:        make(map[string]*demandOrder),
 	}
 }
 
@@ -152,7 +139,14 @@ func (or *orderTracker) loadLPs(ctx context.Context) error {
 			return fmt.Errorf("failed to unmarshal grant: %w", err)
 		}
 
-		lp := lp{
+		resp, err := or.getBalances(ctx, &banktypes.QuerySpendableBalancesRequest{
+			Address: grant.Granter,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to get LP balances: %w", err)
+		}
+
+		lp := &lp{
 			address:             grant.Granter,
 			rollapps:            make(map[string]bool),
 			denoms:              make(map[string]bool),
@@ -160,6 +154,7 @@ func (or *orderTracker) loadLPs(ctx context.Context) error {
 			minFeePercentage:    g.MinLpFeePercentage.Dec,
 			operatorFeeShare:    g.OperatorFeeShare.Dec,
 			settlementValidated: g.SettlementValidated,
+			balance:             resp.Balances,
 		}
 
 		// check the operator fee is the minimum for what the operator wants
@@ -238,7 +233,7 @@ func (or *orderTracker) getValidAndRetryOrders(ctx context.Context, orders []*de
 		if order.settlementValidated {
 			expectedValidationLevel = validationLevelSettlement
 		}
-		valid, err := or.fullNodeClient.BlockValidated(ctx, order.blockHeight, expectedValidationLevel)
+		valid, err := or.fullNodeClient.BlockValidated(ctx, order.proofHeight, expectedValidationLevel)
 		if err != nil {
 			or.logger.Error("failed to check validation of block", zap.Error(err))
 			continue
@@ -248,6 +243,7 @@ func (or *orderTracker) getValidAndRetryOrders(ctx context.Context, orders []*de
 			continue
 		}
 		if or.isOrderExpired(order) {
+			or.releaseAllReservedOrdersFunds(order)
 			or.logger.Debug("order has expired", zap.String("id", order.id))
 			continue
 		}
@@ -309,7 +305,6 @@ func (or *orderTracker) addFulfilledOrders(batch *orderBatch) error {
 		// add to cache
 		or.fulfilledOrders[order.id] = order
 		or.pool.removeOrder(order.id) // just in case it's still in the pool
-
 	}
 	or.fomu.Unlock()
 	return nil
@@ -327,33 +322,35 @@ func (or *orderTracker) canFulfillOrder(order *demandOrder) bool {
 	return true
 }
 
-func (or *orderTracker) findLPForOrder(order *demandOrder) (*lp, error) {
+func (or *orderTracker) findLPForOrder(order *demandOrder) error {
 	or.lpmu.Lock()
 	defer or.lpmu.Unlock()
 
 	lps := or.filterLPsForOrder(order)
 	if len(lps) == 0 {
-		return nil, fmt.Errorf("no LPs found for order")
+		return fmt.Errorf("no LPs found for order")
 	}
 
 	bestLP := selectBestLP(lps)
 	if bestLP == nil {
-		return nil, fmt.Errorf("LP not found")
+		return fmt.Errorf("LP not found")
 	}
 
-	return bestLP, nil
+	order.lpAddress = bestLP.address
+	order.settlementValidated = bestLP.settlementValidated
+	order.operatorFeePart = bestLP.operatorFeeShare
+
+	// optimistically deduct from the LP's balance
+	bestLP.reserveFunds(order.amount)
+
+	return nil
 }
 
-func (or *orderTracker) filterLPsForOrder(order *demandOrder) []lp {
-	lps := make([]lp, 0, len(or.lps))
+func (or *orderTracker) filterLPsForOrder(order *demandOrder) []*lp {
+	lps := make([]*lp, 0, len(or.lps))
 	for _, lp := range or.lps {
-		// check the fee is at least the minimum for what the lp wants
-		operatorFee := sdk.NewDecFromInt(order.fee.Amount).Mul(or.minOperatorFeeShare)
-		amountDec := sdk.NewDecFromInt(order.amount[0].Amount.Add(order.fee.Amount))
-		minLPFee := amountDec.Mul(lp.minFeePercentage).RoundInt()
-		lpFee := order.fee.Amount.Sub(operatorFee.RoundInt())
-
-		if lpFee.LT(minLPFee) {
+		amount := order.amount
+		if !lp.hasBalance(amount) {
 			continue
 		}
 
@@ -368,10 +365,18 @@ func (or *orderTracker) filterLPsForOrder(order *demandOrder) []lp {
 		}
 
 		// check the order price does not exceed the max price
-		if lp.maxPrice.IsAllPositive() {
-			if order.amount.IsAllGT(lp.maxPrice) {
-				continue
-			}
+		if lp.maxPrice.IsAllPositive() && order.amount.IsAnyGT(lp.maxPrice) {
+			continue
+		}
+
+		// check the fee is at least the minimum for what the lp wants
+		operatorFee := sdk.NewDecFromInt(order.fee.Amount).Mul(lp.operatorFeeShare).RoundInt()
+		amountDec := sdk.NewDecFromInt(order.amount[0].Amount.Add(order.fee.Amount))
+		minLPFee := amountDec.Mul(lp.minFeePercentage).RoundInt()
+		lpFee := order.fee.Amount.Sub(operatorFee)
+
+		if lpFee.LT(minLPFee) {
+			continue
 		}
 
 		lps = append(lps, lp)
@@ -379,7 +384,7 @@ func (or *orderTracker) filterLPsForOrder(order *demandOrder) []lp {
 	return lps
 }
 
-func selectBestLP(lps []lp) *lp {
+func selectBestLP(lps []*lp) *lp {
 	if len(lps) == 0 {
 		return nil
 	}
@@ -393,7 +398,7 @@ func selectBestLP(lps []lp) *lp {
 		return lps[i].operatorFeeShare.GT(lps[j].operatorFeeShare)
 	})
 
-	return &lps[0]
+	return lps[0]
 }
 
 func (or *orderTracker) isOrderFulfilled(id string) bool {

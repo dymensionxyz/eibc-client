@@ -26,8 +26,10 @@ type orderFulfiller struct {
 	logger              *zap.Logger
 	FulfillDemandOrders func(demandOrder ...*demandOrder) error
 
-	newOrdersCh       chan []*demandOrder
-	fulfilledOrdersCh chan<- *orderBatch
+	releaseAllReservedOrdersFunds func(demandOrder ...*demandOrder)
+	debitAllReservedOrdersFunds   func(demandOrder ...*demandOrder)
+	newOrdersCh                   chan []*demandOrder
+	fulfilledOrdersCh             chan<- *orderBatch
 }
 
 type cosmosClient interface {
@@ -42,15 +44,19 @@ func newOrderFulfiller(
 	acc account,
 	policyAddress string,
 	operatorAddress string,
+	releaseAllReservedOrdersFunds func(demandOrder ...*demandOrder),
+	debitAllReservedOrdersFunds func(demandOrder ...*demandOrder),
 	logger *zap.Logger,
 ) *orderFulfiller {
 	o := &orderFulfiller{
-		account:           acc,
-		policyAddress:     policyAddress,
-		operatorAddress:   operatorAddress,
-		client:            client,
-		fulfilledOrdersCh: fulfilledOrdersCh,
-		newOrdersCh:       newOrdersCh,
+		account:                       acc,
+		policyAddress:                 policyAddress,
+		operatorAddress:               operatorAddress,
+		client:                        client,
+		fulfilledOrdersCh:             fulfilledOrdersCh,
+		newOrdersCh:                   newOrdersCh,
+		releaseAllReservedOrdersFunds: releaseAllReservedOrdersFunds,
+		debitAllReservedOrdersFunds:   debitAllReservedOrdersFunds,
 		logger: logger.With(zap.String("module", "order-fulfiller"),
 			zap.String("bot-name", acc.Name), zap.String("address", acc.Address)),
 	}
@@ -68,6 +74,8 @@ func buildBot(
 	clientCfg config.ClientConfig,
 	newOrderCh chan []*demandOrder,
 	fulfilledCh chan *orderBatch,
+	releaseAllReservedOrdersFunds func(demandOrder ...*demandOrder),
+	debitAllReservedOrdersFunds func(demandOrder ...*demandOrder),
 ) (*orderFulfiller, error) {
 	cosmosClient, err := cosmosclient.New(config.GetCosmosClientOptions(clientCfg)...)
 	if err != nil {
@@ -81,6 +89,8 @@ func buildBot(
 		acc,
 		cfg.PolicyAddress,
 		operatorAddress,
+		releaseAllReservedOrdersFunds,
+		debitAllReservedOrdersFunds,
 		logger,
 	), nil
 }
@@ -119,7 +129,10 @@ func (ol *orderFulfiller) processBatch(batch []*demandOrder) error {
 	ol.logger.Info("fulfilling orders", zap.Strings("ids", ids))
 
 	if err := ol.FulfillDemandOrders(batch...); err != nil {
+		ol.releaseAllReservedOrdersFunds(batch...)
 		return fmt.Errorf("failed to fulfill orders: ids: %v; %w", ids, err)
+	} else {
+		ol.debitAllReservedOrdersFunds(batch...)
 	}
 
 	ol.logger.Info("orders fulfilled", zap.Strings("ids", ids))
@@ -141,7 +154,7 @@ func (ol *orderFulfiller) processBatch(batch []*demandOrder) error {
 /*
 1. dymd tx eibc fulfill-order-authorized 388cedaafbe9ea05c5b6422970005d4a9cb13b2b679afedb99aa82ccff8784aa 10 --rollapp-id rollappwasme_1235-1 --fulfiller-address dym1s5y26zt0msaypsafujrltq7f0h04zzu0e8q5kr --operator-address dym1qhxedstgx9fv3zmjuj687y6lh5cwm9czhqajhw --price 1000adym --fulfiller-fee-part 0.4 --settlement-validated --from alex --generate-only > tx.json
 2. dymd tx authz exec tx.json --from dym1c799jddmlz7segvg6jrw6w2k6svwafganjdznard3tc74n7td7rqrx4c5e --fees 1dym -y --generate-only > tx_exec.json
-3. dymd tx group submit-proposal proposal.json --from yishay --fees 1dym --exec try --gas auto --fee-granter dym1qhxedstgx9fv3zmjuj687y6lh5cwm9czhqajhw -y
+3. dymd tx group submit-proposal proposal.json --from xela --fees 1dym --exec try --gas auto --fee-granter dym1qhxedstgx9fv3zmjuj687y6lh5cwm9czhqajhw -y
 */
 func (ol *orderFulfiller) fulfillAuthorizedDemandOrders(demandOrder ...*demandOrder) error {
 	fulfillMsgs := make([]sdk.Msg, len(demandOrder))
@@ -151,7 +164,6 @@ func (ol *orderFulfiller) fulfillAuthorizedDemandOrders(demandOrder ...*demandOr
 			order.id,
 			order.rollappId,
 			order.lpAddress,
-			ol.policyAddress,
 			ol.operatorAddress,
 			order.fee.Amount.String(),
 			order.amount,
@@ -194,7 +206,7 @@ func (ol *orderFulfiller) fulfillAuthorizedDemandOrders(demandOrder ...*demandOr
 	}
 
 	var presp []proposalResp
-	if err := json.Unmarshal([]byte(resp.TxResponse.RawLog), &presp); err != nil {
+	if err = json.Unmarshal([]byte(resp.TxResponse.RawLog), &presp); err != nil {
 		return fmt.Errorf("failed to unmarshal tx response: %w", err)
 	}
 
@@ -211,7 +223,7 @@ func (ol *orderFulfiller) fulfillAuthorizedDemandOrders(demandOrder ...*demandOr
 						} else {
 							theErr = attr.Value
 						}
-						return fmt.Errorf("fulfillment failed: %s", theErr)
+						return fmt.Errorf("proposal execution failed: %s", theErr)
 					}
 				}
 			}

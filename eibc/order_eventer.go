@@ -41,9 +41,7 @@ func newOrderEventer(
 }
 
 const (
-	createdEvent   = "dymensionxyz.dymension.eibc.EventDemandOrderCreated"
-	finalizedEvent = "dymensionxyz.dymension.eibc.EventDemandOrderPacketStatusUpdated"
-	stateInfoEvent = "state_update"
+	createdEvent = "dymensionxyz.dymension.eibc.EventDemandOrderCreated"
 )
 
 func (e *orderEventer) start(ctx context.Context) error {
@@ -54,37 +52,6 @@ func (e *orderEventer) start(ctx context.Context) error {
 	if err := e.subscribeToPendingDemandOrders(ctx); err != nil {
 		return fmt.Errorf("failed to subscribe to pending demand orders: %w", err)
 	}
-
-	/*go func() {
-		time.Sleep(3 * time.Second)
-
-		res1 := tmtypes.ResultEvent{
-			Events: map[string][]string{
-				createdEvent + ".order_id":      {"388cedaafbe9ea05c5b6422970005d4a9cb13b2b679afedb99aa82ccff8784aa"},
-				createdEvent + ".price":         {"1000adym"},
-				createdEvent + ".packet_status": {"PENDING"},
-				createdEvent + ".fee":           {"100adym"},
-				createdEvent + ".rollapp_id":    {"rollappwasme_1235-1"},
-				createdEvent + ".packet_key":    {"somepacketkey1"},
-				createdEvent + ".proof_height":  {"100"},
-			},
-		}
-
-		res2 := tmtypes.ResultEvent{
-			Events: map[string][]string{
-				createdEvent + ".order_id":      {"43179f65b72f3b213457e0c5a16f998ca3ed018f8d8010ba62753027858b63bb"},
-				createdEvent + ".price":         {"1000adym"},
-				createdEvent + ".packet_status": {"PENDING"},
-				createdEvent + ".fee":           {"100adym"},
-				createdEvent + ".rollapp_id":    {"rollappwasme_1235-1"},
-				createdEvent + ".packet_key":    {"somepacketkey1"},
-				createdEvent + ".proof_height":  {"100"},
-			},
-		}
-
-		_ = e.enqueueEventOrders(ctx, res1)
-		_ = e.enqueueEventOrders(ctx, res2)
-	}()*/
 
 	return nil
 }
@@ -157,7 +124,7 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 			fee:           fee,
 			status:        statuses[i],
 			rollappId:     rollapps[i],
-			blockHeight:   height,
+			proofHeight:   height,
 			validDeadline: validDeadline,
 		}
 
@@ -165,20 +132,10 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 			continue
 		}
 
-		lp, err := e.orderTracker.findLPForOrder(order)
-		if err != nil {
-			e.logger.Error("failed to find LP for order", zap.Error(err))
+		if err := e.orderTracker.findLPForOrder(order); err != nil {
+			e.logger.Warn("failed to find LP for order", zap.Error(err), zap.String("order_id", order.id))
 			continue
 		}
-
-		if lp == nil {
-			e.logger.Error("failed to find LP for order")
-			continue
-		}
-
-		order.lpAddress = lp.address
-		order.settlementValidated = lp.settlementValidated
-		order.operatorFeePart = lp.operatorFeeShare
 
 		newOrders = append(newOrders, order)
 	}

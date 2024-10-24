@@ -48,7 +48,7 @@ func newOrderPoller(
 }
 
 const (
-	ordersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: {equalTo: EibcPending}}) {nodes { eibcOrderId amount destinationChannel blockHeight rollappId eibcFee packetKey }}}"}`
+	ordersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: {equalTo: EibcPending}}) {nodes { eibcOrderId amount destinationChannel blockHeight rollappId eibcFee }}}"}`
 )
 
 type Order struct {
@@ -57,7 +57,6 @@ type Order struct {
 	Fee         string `json:"eibcFee"`
 	RollappId   string `json:"rollappId"`
 	BlockHeight string `json:"blockHeight"`
-	PacketKey   string `json:"packetKey"`
 }
 
 type ordersResponse struct {
@@ -68,7 +67,11 @@ type ordersResponse struct {
 	} `json:"data"`
 }
 
-func (p *orderPoller) start(ctx context.Context) {
+func (p *orderPoller) start(ctx context.Context) error {
+	if err := p.pollPendingDemandOrders(); err != nil {
+		return fmt.Errorf("failed to refresh demand orders: %w", err)
+	}
+
 	go func() {
 		for c := time.Tick(p.interval); ; <-c {
 			select {
@@ -81,6 +84,7 @@ func (p *orderPoller) start(ctx context.Context) {
 			}
 		}
 	}()
+	return nil
 }
 
 func (p *orderPoller) pollPendingDemandOrders() error {
@@ -94,6 +98,16 @@ func (p *orderPoller) pollPendingDemandOrders() error {
 	if len(newOrders) == 0 {
 		p.logger.Debug("no new orders")
 		return nil
+	}
+
+	if p.logger.Level() <= zap.DebugLevel {
+		ids := make([]string, 0, len(newOrders))
+		for _, order := range newOrders {
+			ids = append(ids, order.id)
+		}
+		p.logger.Debug("new demand orders", zap.Strings("ids", ids))
+	} else {
+		p.logger.Info("new demand orders", zap.Int("count", len(newOrders)))
 	}
 
 	p.orderTracker.addOrder(newOrders...)
@@ -139,8 +153,7 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 			fee:           fee,
 			denom:         fee.Denom,
 			rollappId:     order.RollappId,
-			packetKey:     order.PacketKey,
-			blockHeight:   blockHeight,
+			proofHeight:   blockHeight,
 			validDeadline: validDeadline,
 		}
 
@@ -148,26 +161,16 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 			continue
 		}
 
-		lp, err := p.orderTracker.findLPForOrder(newOrder)
-		if err != nil {
-			p.logger.Error("failed to find LP for order", zap.Error(err))
+		if err := p.orderTracker.findLPForOrder(newOrder); err != nil {
+			p.logger.Warn("failed to find LP for order", zap.Error(err), zap.String("order_id", newOrder.id))
 			continue
 		}
-
-		if lp == nil {
-			p.logger.Error("failed to find LP for order")
-			continue
-		}
-
-		newOrder.lpAddress = lp.address
-		newOrder.settlementValidated = lp.settlementValidated
-		newOrder.operatorFeePart = lp.operatorFeeShare
 
 		orders = append(orders, newOrder)
 	}
 
 	sort.Slice(orders, func(i, j int) bool {
-		return orders[i].blockHeight < orders[j].blockHeight
+		return orders[i].proofHeight < orders[j].proofHeight
 	})
 	return orders
 }
