@@ -25,7 +25,7 @@ To set up the bot, you need to have Go installed on your machine. Once Go is ins
 - **Operator Setup**: The eibc client will expect certain environment to be set up before it can run.
 1. The operator account needs to be set up with some adym coins to pay for gas/fees.
    dymd keys add operator
-2. A group needs to be created where the operator account is the admin.
+2. A group needs to be created where the operator account is the admin:
 
         dymd tx group create-group operator --keyring-backend test "==A" members.json
 
@@ -34,13 +34,13 @@ members.json
    {
       "members": [
            {
-                "address": "dym1qhxedstgx9fv3zmjuj687y6lh5cwm9czhqajhw",
+                "address": "<operator_address>",
                 "weight": "1", "metadata": "president"
            }
         ]
    }
    ```
-3. The group needs a policy that can be granted by LPs in order to source funds from them and sign order fulfillment messages on their behalf.
+3. The group needs a policy that can be granted by LPs in order to source funds from them and sign order fulfillment messages on their behalf:
 
         dymd tx group create-group-policy operator 2 "==A" policy.json --fees 1dym -y
 
@@ -56,7 +56,7 @@ policy.json
 }
 ```
 
-4. At least one LP needs to grant authorization to the group to fulfill orders.
+4. At least one LP needs to grant authorization to the group to fulfill orders:
 
             dymd tx eibc grant <POLICY_ADDRESS> --from lp_key --keyring-backend test \
                 --spend-limit 10000adym \
