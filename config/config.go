@@ -12,9 +12,10 @@ import (
 )
 
 type Config struct {
-	NodeAddress  string             `mapstructure:"node_address"`
-	Gas          GasConfig          `mapstructure:"gas"`
-	OrderPolling OrderPollingConfig `mapstructure:"order_polling"`
+	NodeAddress  string                   `mapstructure:"node_address"`
+	Gas          GasConfig                `mapstructure:"gas"`
+	OrderPolling OrderPollingConfig       `mapstructure:"order_polling"`
+	Rollapps     map[string]RollappConfig `mapstructure:"rollapps"`
 
 	Operator   OperatorConfig   `mapstructure:"operator"`
 	Bots       BotConfig        `mapstructure:"bots"`
@@ -53,9 +54,12 @@ type OperatorConfig struct {
 
 type ValidationConfig struct {
 	FallbackLevel      ValidationLevel `mapstructure:"fallback_level"`
-	FullNodes          []string        `mapstructure:"full_nodes"`
-	MinConfirmations   int             `mapstructure:"min_confirmations"`
 	ValidationWaitTime time.Duration   `mapstructure:"validation_wait_time"`
+}
+
+type RollappConfig struct {
+	FullNodes        []string `mapstructure:"full_nodes"`
+	MinConfirmations int      `mapstructure:"min_confirmations"`
 }
 
 const (

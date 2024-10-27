@@ -233,7 +233,7 @@ func (or *orderTracker) getValidAndRetryOrders(ctx context.Context, orders []*de
 		if order.settlementValidated {
 			expectedValidationLevel = validationLevelSettlement
 		}
-		valid, err := or.fullNodeClient.BlockValidated(ctx, order.proofHeight, expectedValidationLevel)
+		valid, err := or.fullNodeClient.BlockValidated(ctx, order.rollappId, order.proofHeight, expectedValidationLevel)
 		if err != nil {
 			or.logger.Error("failed to check validation of block", zap.Error(err))
 			continue
@@ -311,6 +311,10 @@ func (or *orderTracker) addFulfilledOrders(batch *orderBatch) error {
 }
 
 func (or *orderTracker) canFulfillOrder(order *demandOrder) bool {
+	if !or.isRollappSupported(order.rollappId) {
+		return false
+	}
+
 	if or.isOrderFulfilled(order.id) {
 		return false
 	}
@@ -399,6 +403,11 @@ func selectBestLP(lps []*lp) *lp {
 	})
 
 	return lps[0]
+}
+
+func (or *orderTracker) isRollappSupported(rollappID string) bool {
+	_, ok := or.fullNodeClient.rollapps[rollappID]
+	return ok
 }
 
 func (or *orderTracker) isOrderFulfilled(id string) bool {

@@ -9,19 +9,21 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/dymensionxyz/eibc-client/config"
 )
 
 type nodeClient struct {
-	client                *http.Client
-	locations             []string
-	minimumValidatedNodes int
-	get                   getFn
+	client   *http.Client
+	rollapps map[string]config.RollappConfig
+	get      getFn
 }
 
 type getFn func(ctx context.Context, url string) (*blockValidatedResponse, error)
 
 type blockValidatedResponse struct {
-	Result validationLevel `json:"Result"`
+	ChainID string          `json:"ChainID"`
+	Result  validationLevel `json:"Result"`
 }
 
 type JSONResponse struct {
@@ -40,22 +42,20 @@ const (
 	validationLevelSettlement
 )
 
-func newNodeClient(
-	locations []string,
-	minimumValidatedNodes int,
-) (*nodeClient, error) {
-	if minimumValidatedNodes == 0 {
-		return nil, fmt.Errorf("minimum validated nodes must be greater than 0")
-	}
-	if len(locations) < minimumValidatedNodes {
-		return nil, fmt.Errorf("not enough locations to validate blocks")
+func newNodeClient(rollapps map[string]config.RollappConfig) (*nodeClient, error) {
+	for rollappID, cfg := range rollapps {
+		if cfg.MinConfirmations == 0 {
+			return nil, fmt.Errorf("rollapp ID %s: minimum validated nodes must be greater than 0", rollappID)
+		}
+		if len(cfg.FullNodes) < cfg.MinConfirmations {
+			return nil, fmt.Errorf("rollapp ID %s: not enough locations to validate blocks", rollappID)
+		}
 	}
 	n := &nodeClient{
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
-		locations:             locations,
-		minimumValidatedNodes: minimumValidatedNodes,
+		rollapps: rollapps,
 	}
 	n.get = n.getHttp
 	return n, nil
@@ -65,16 +65,17 @@ const (
 	blockValidatedPath = "/block_validated"
 )
 
-func (c *nodeClient) BlockValidated(ctx context.Context, height int64, expectedValidationLevel validationLevel) (bool, error) {
+func (c *nodeClient) BlockValidated(ctx context.Context, rollappID string, height int64, expectedValidationLevel validationLevel) (bool, error) {
 	var validatedNodes int32
 	var wg sync.WaitGroup
-	errChan := make(chan error, len(c.locations))
+	rollappConfig := c.rollapps[rollappID]
+	errChan := make(chan error, len(rollappConfig.FullNodes))
 
-	for _, location := range c.locations {
+	for _, location := range rollappConfig.FullNodes {
 		wg.Add(1)
-		go func(ctx context.Context, location string) {
+		go func(ctx context.Context, rollappID, location string) {
 			defer wg.Done()
-			valid, err := c.nodeBlockValidated(ctx, location, height, expectedValidationLevel)
+			valid, err := c.nodeBlockValidated(ctx, rollappID, location, height, expectedValidationLevel)
 			if err != nil {
 				errChan <- err
 				return
@@ -82,7 +83,7 @@ func (c *nodeClient) BlockValidated(ctx context.Context, height int64, expectedV
 			if valid {
 				atomic.AddInt32(&validatedNodes, 1)
 			}
-		}(ctx, location)
+		}(ctx, rollappID, location)
 	}
 
 	wg.Wait()
@@ -92,11 +93,12 @@ func (c *nodeClient) BlockValidated(ctx context.Context, height int64, expectedV
 		return false, <-errChan
 	}
 
-	return int(validatedNodes) >= c.minimumValidatedNodes, nil
+	return int(validatedNodes) >= rollappConfig.MinConfirmations, nil
 }
 
 func (c *nodeClient) nodeBlockValidated(
 	ctx context.Context,
+	rollappID,
 	location string,
 	height int64,
 	expectedValidationLevel validationLevel,
@@ -106,6 +108,11 @@ func (c *nodeClient) nodeBlockValidated(
 	if err != nil {
 		return false, err
 	}
+
+	if validated.ChainID != rollappID {
+		return false, fmt.Errorf("invalid chain ID! want: %s, got: %s, height: %d", rollappID, validated.ChainID, height)
+	}
+
 	return validated.Result >= expectedValidationLevel, nil
 }
 

@@ -7,16 +7,19 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/dymensionxyz/eibc-client/config"
 )
 
 func Test_nodeClient_nodeBlockValidated(t *testing.T) {
 	type fields struct {
 		client                  *http.Client
-		locations               []string
+		rollapps                map[string]config.RollappConfig
 		expectedValidationLevel validationLevel
 	}
 	type args struct {
-		height int64
+		height    int64
+		rollappID string
 	}
 	tests := []struct {
 		name    string
@@ -28,36 +31,54 @@ func Test_nodeClient_nodeBlockValidated(t *testing.T) {
 		{
 			name: "success: p2p at height 1",
 			fields: fields{
-				client:                  &http.Client{},
-				locations:               []string{"http://localhost:26657"},
+				client: &http.Client{},
+				rollapps: map[string]config.RollappConfig{
+					"rollapp1": {
+						MinConfirmations: 1,
+						FullNodes:        []string{"http://localhost:26657"},
+					},
+				},
 				expectedValidationLevel: validationLevelP2P,
 			},
 			args: args{
-				height: 1,
+				height:    1,
+				rollappID: "rollapp1",
 			},
 			want:    true,
 			wantErr: assert.NoError,
 		}, {
 			name: "failure: p2p at height 100",
 			fields: fields{
-				client:                  &http.Client{},
-				locations:               []string{"http://localhost:26657"},
+				client: &http.Client{},
+				rollapps: map[string]config.RollappConfig{
+					"rollapp1": {
+						MinConfirmations: 1,
+						FullNodes:        []string{"http://localhost:26657"},
+					},
+				},
 				expectedValidationLevel: validationLevelP2P,
 			},
 			args: args{
-				height: 100,
+				height:    100,
+				rollappID: "rollapp1",
 			},
 			want:    false,
 			wantErr: assert.NoError,
 		}, {
 			name: "failure: settlement at height 1",
 			fields: fields{
-				client:                  &http.Client{},
-				locations:               []string{"http://localhost:26657"},
+				client: &http.Client{},
+				rollapps: map[string]config.RollappConfig{
+					"rollapp1": {
+						MinConfirmations: 1,
+						FullNodes:        []string{"http://localhost:26657"},
+					},
+				},
 				expectedValidationLevel: validationLevelSettlement,
 			},
 			args: args{
-				height: 1,
+				height:    1,
+				rollappID: "rollapp1",
 			},
 			want:    false,
 			wantErr: assert.NoError,
@@ -66,17 +87,17 @@ func Test_nodeClient_nodeBlockValidated(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &nodeClient{
-				client:    tt.fields.client,
-				locations: tt.fields.locations,
+				client:   tt.fields.client,
+				rollapps: tt.fields.rollapps,
 			}
 			c.get = c.getHttp
 
 			ctx := context.Background()
-			got, err := c.nodeBlockValidated(ctx, tt.fields.locations[0], tt.args.height, tt.fields.expectedValidationLevel)
-			if !tt.wantErr(t, err, fmt.Sprintf("nodeBlockValidated(%v, %v)", tt.fields.locations[0], tt.args.height)) {
+			got, err := c.nodeBlockValidated(ctx, tt.args.rollappID, tt.fields.rollapps[tt.args.rollappID].FullNodes[0], tt.args.height, tt.fields.expectedValidationLevel)
+			if !tt.wantErr(t, err, fmt.Sprintf("nodeBlockValidated(%s, %s, %v)", tt.args.rollappID, tt.fields.rollapps[tt.args.rollappID].FullNodes[0], tt.args.height)) {
 				return
 			}
-			assert.Equalf(t, tt.want, got, "nodeBlockValidated(%v, %v)", tt.fields.locations[0], tt.args.height)
+			assert.Equalf(t, tt.want, got, "nodeBlockValidated(%s, %s, %v)", tt.args.rollappID, tt.fields.rollapps[tt.args.rollappID].FullNodes[0], tt.args.height)
 		})
 	}
 }

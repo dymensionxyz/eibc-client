@@ -97,23 +97,36 @@ func TestOrderClient(t *testing.T) {
 			},
 			hubClient: mockNodeClient{},
 			fullNodeClient: &nodeClient{
-				locations:             []string{"location1", "location2"},
-				minimumValidatedNodes: 2,
+				rollapps: map[string]config.RollappConfig{
+					"rollapp1": {
+						MinConfirmations: 2,
+						FullNodes:        []string{"location1", "location2"},
+					},
+					"rollapp2": {
+						MinConfirmations: 2,
+						FullNodes:        []string{"location3", "location4"},
+					},
+				},
 				get: mockValidGet(map[string]map[int64]*blockValidatedResponse{
 					"location1": {
-						1: {Result: validationLevelP2P},
-						2: {Result: validationLevelP2P},
-						3: {Result: validationLevelP2P},
-						4: {Result: validationLevelSettlement},
-						5: {Result: validationLevelP2P},
-						6: {Result: validationLevelP2P},
+						1: {Result: validationLevelP2P, ChainID: "rollapp1"},
+						2: {Result: validationLevelP2P, ChainID: "rollapp1"},
+						5: {Result: validationLevelP2P, ChainID: "rollapp1"},
 					},
 					"location2": {
-						1: {Result: validationLevelP2P},
-						2: {Result: validationLevelP2P},
-						3: {Result: validationLevelP2P},
-						4: {Result: validationLevelSettlement},
-						5: {Result: validationLevelP2P},
+						1: {Result: validationLevelP2P, ChainID: "rollapp1"},
+						2: {Result: validationLevelP2P, ChainID: "rollapp1"},
+						5: {Result: validationLevelP2P, ChainID: "rollapp1"},
+					},
+					"location3": {
+						3: {Result: validationLevelP2P, ChainID: "rollapp2"},
+						4: {Result: validationLevelSettlement, ChainID: "rollapp2"},
+						6: {Result: validationLevelP2P, ChainID: "rollapp2"},
+					},
+					"location4": {
+						3: {Result: validationLevelP2P, ChainID: "rollapp2"},
+						4: {Result: validationLevelSettlement, ChainID: "rollapp2"},
+						6: {Result: validationLevelNone, ChainID: "rollapp2"},
 					},
 				}),
 			},

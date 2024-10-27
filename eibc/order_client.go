@@ -25,10 +25,6 @@ type orderClient struct {
 }
 
 func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error) {
-	if cfg.Validation.MinConfirmations > len(cfg.Validation.FullNodes) {
-		return nil, fmt.Errorf("min confirmations cannot be greater than the number of full nodes")
-	}
-
 	sdkcfg := sdk.GetConfig()
 	sdkcfg.SetBech32PrefixForAccount(config.HubAddressPrefix, config.PubKeyPrefix)
 
@@ -219,10 +215,7 @@ func getFullNodeClients(cfg config.Config) (*nodeClient, error) {
 		return &nodeClient{}, nil
 	}
 
-	client, err := newNodeClient(
-		cfg.Validation.FullNodes,
-		cfg.Validation.MinConfirmations,
-	)
+	client, err := newNodeClient(cfg.Rollapps)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create full node client: %w", err)
 	}
