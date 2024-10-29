@@ -27,7 +27,7 @@ To set up the bot, you need to have Go installed on your machine. Once Go is ins
    dymd keys add operator
 2. A group needs to be created where the operator account is the admin:
 
-        dymd tx group create-group operator --keyring-backend test "==A" members.json
+        dymd tx group create-group operator --keyring-backend test "==A" members.json --fees 1dym -y
 
 members.json
    ```
@@ -42,7 +42,7 @@ members.json
    ```
 3. The group needs a policy that can be granted by LPs in order to source funds from them and sign order fulfillment messages on their behalf:
 
-        dymd tx group create-group-policy operator 2 "==A" policy.json --fees 1dym -y
+        dymd tx group create-group-policy operator 1 "==A" policy.json --fees 1dym -y
 
 policy.json
 ```
@@ -58,14 +58,15 @@ policy.json
 
 4. At least one LP needs to grant authorization to the group to fulfill orders:
 
-            dymd tx eibc grant <POLICY_ADDRESS> --from lp_key --keyring-backend test \
-                --spend-limit 10000adym \
-                --rollapps rollappwasme_1235-1,rollapp2 \ 
-                --denoms "adym,uatom" \
-                --min-lp-fee-percentage "0.2" \
-                --max-price 10000adym \
-                --operator-fee-share 0.4 \
-                --settlement-validated
+            dymd tx eibc grant <POLICY_ADDRESS> \
+                      --from lp_key --keyring-backend test \
+                      --spend-limit 10000adym \
+                      --rollapps "rollapp1,rollapp2" \ 
+                      --denoms "adym,uatom" \
+                      --min-lp-fee-percentage "0.1" \
+                      --max-price 10000adym \
+                      --operator-fee-share 0.1 \
+                      --settlement-validated --fees 1dym -y
 
 ## Usage
 
