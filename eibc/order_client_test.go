@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
+
 	"github.com/dymensionxyz/eibc-client/config"
 	"github.com/dymensionxyz/eibc-client/types"
 )
@@ -62,35 +63,48 @@ func TestOrderClient(t *testing.T) {
 			lpConfigs: []lpConfig{
 				{
 					grant: &types.FulfillOrderAuthorization{
-						Rollapps:            []string{"rollapp1", "rollapp2"},
-						Denoms:              []string{"stake", "adym"},
-						MinLpFeePercentage:  sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
-						MaxPrice:            sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210)), sdk.NewCoin("adym", sdk.NewInt(150))),
-						OperatorFeeShare:    sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
-						SettlementValidated: false,
-						SpendLimit:          nil,
+						Rollapps: []*types.RollappCriteria{
+							{
+								RollappId:           "rollapp1",
+								Denoms:              []string{"stake", "adym"},
+								MinLpFeePercentage:  sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
+								MaxPrice:            sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210)), sdk.NewCoin("adym", sdk.NewInt(150))),
+								OperatorFeeShare:    sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
+								SettlementValidated: false,
+							}, {
+								RollappId:          "rollapp2",
+								Denoms:             []string{"stake", "adym"},
+								MinLpFeePercentage: sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
+								MaxPrice:           sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210)), sdk.NewCoin("adym", sdk.NewInt(150))),
+								OperatorFeeShare:   sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
+							}},
+						SpendLimit: nil,
 					},
 					balance: sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(201)), sdk.NewCoin("adym", sdk.NewInt(140))),
 				}, {
 					grant: &types.FulfillOrderAuthorization{
-						Rollapps:            []string{"rollapp2"},
-						Denoms:              []string{"adym"},
-						MinLpFeePercentage:  sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
-						MaxPrice:            sdk.NewCoins(sdk.NewCoin("adym", sdk.NewInt(450))),
-						OperatorFeeShare:    sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.2")},
-						SettlementValidated: true,
-						SpendLimit:          nil,
+						Rollapps: []*types.RollappCriteria{{
+							RollappId:           "rollapp2",
+							Denoms:              []string{"adym"},
+							MinLpFeePercentage:  sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
+							MaxPrice:            sdk.NewCoins(sdk.NewCoin("adym", sdk.NewInt(450))),
+							OperatorFeeShare:    sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.2")},
+							SettlementValidated: true,
+						}},
+						SpendLimit: nil,
 					},
 					balance: sdk.NewCoins(sdk.NewCoin("adym", sdk.NewInt(500))),
 				}, {
 					grant: &types.FulfillOrderAuthorization{
-						Rollapps:            []string{"rollapp1"},
-						Denoms:              []string{"stake"},
-						MinLpFeePercentage:  sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
-						MaxPrice:            sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(450))),
-						OperatorFeeShare:    sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.2")},
-						SettlementValidated: false,
-						SpendLimit:          nil,
+						Rollapps: []*types.RollappCriteria{{
+							RollappId:           "rollapp1",
+							Denoms:              []string{"stake"},
+							MinLpFeePercentage:  sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
+							MaxPrice:            sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(450))),
+							OperatorFeeShare:    sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.2")},
+							SettlementValidated: false,
+						}},
+						SpendLimit: nil,
 					},
 					balance: sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(200)), sdk.NewCoin("adym", sdk.NewInt(100))),
 				},

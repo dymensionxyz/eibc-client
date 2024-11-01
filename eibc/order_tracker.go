@@ -147,27 +147,35 @@ func (or *orderTracker) loadLPs(ctx context.Context) error {
 		}
 
 		lp := &lp{
-			address:             grant.Granter,
-			rollapps:            make(map[string]bool),
-			denoms:              make(map[string]bool),
-			maxPrice:            g.MaxPrice,
-			minFeePercentage:    g.MinLpFeePercentage.Dec,
-			operatorFeeShare:    g.OperatorFeeShare.Dec,
-			settlementValidated: g.SettlementValidated,
-			balance:             resp.Balances,
+			address:  grant.Granter,
+			rollapps: make(map[string]rollappCriteria),
+			balance:  resp.Balances,
 		}
 
-		// check the operator fee is the minimum for what the operator wants
-		if lp.operatorFeeShare.LT(or.minOperatorFeeShare) {
+		for _, rollapp := range g.Rollapps {
+			// check the operator fee is the minimum for what the operator wants
+			if rollapp.OperatorFeeShare.Dec.LT(or.minOperatorFeeShare) {
+				continue
+			}
+
+			denoms := make(map[string]bool)
+			for _, denom := range rollapp.Denoms {
+				denoms[denom] = true
+			}
+			lp.rollapps[rollapp.RollappId] = rollappCriteria{
+				rollappID:           rollapp.RollappId,
+				denoms:              denoms,
+				maxPrice:            rollapp.MaxPrice,
+				minFeePercentage:    rollapp.MinLpFeePercentage.Dec,
+				operatorFeeShare:    rollapp.OperatorFeeShare.Dec,
+				settlementValidated: rollapp.SettlementValidated,
+			}
+		}
+
+		if len(lp.rollapps) == 0 {
 			continue
 		}
 
-		for _, rollappID := range g.Rollapps {
-			lp.rollapps[rollappID] = true
-		}
-		for _, denom := range g.Denoms {
-			lp.denoms[denom] = true
-		}
 		or.lps[grant.Granter] = lp
 	}
 
@@ -335,14 +343,14 @@ func (or *orderTracker) findLPForOrder(order *demandOrder) error {
 		return fmt.Errorf("no LPs found for order")
 	}
 
-	bestLP := selectBestLP(lps)
+	bestLP := selectBestLP(lps, order.rollappId)
 	if bestLP == nil {
 		return fmt.Errorf("LP not found")
 	}
 
 	order.lpAddress = bestLP.address
-	order.settlementValidated = bestLP.settlementValidated
-	order.operatorFeePart = bestLP.operatorFeeShare
+	order.settlementValidated = bestLP.rollapps[order.rollappId].settlementValidated
+	order.operatorFeePart = bestLP.rollapps[order.rollappId].operatorFeeShare
 
 	// optimistically deduct from the LP's balance
 	bestLP.reserveFunds(order.amount)
@@ -359,24 +367,25 @@ func (or *orderTracker) filterLPsForOrder(order *demandOrder) []*lp {
 		}
 
 		// check the rollapp is allowed
-		if len(lp.rollapps) > 0 && !lp.rollapps[order.rollappId] {
+		rollapp, ok := lp.rollapps[order.rollappId]
+		if !ok {
 			continue
 		}
 
 		// check the denom is allowed
-		if len(lp.denoms) > 0 && !lp.denoms[order.fee.Denom] {
+		if len(rollapp.denoms) > 0 && !rollapp.denoms[order.fee.Denom] {
 			continue
 		}
 
 		// check the order price does not exceed the max price
-		if lp.maxPrice.IsAllPositive() && order.amount.IsAnyGT(lp.maxPrice) {
+		if rollapp.maxPrice.IsAllPositive() && order.amount.IsAnyGT(rollapp.maxPrice) {
 			continue
 		}
 
 		// check the fee is at least the minimum for what the lp wants
-		operatorFee := sdk.NewDecFromInt(order.fee.Amount).Mul(lp.operatorFeeShare).RoundInt()
+		operatorFee := sdk.NewDecFromInt(order.fee.Amount).Mul(rollapp.operatorFeeShare).RoundInt()
 		amountDec := sdk.NewDecFromInt(order.amount[0].Amount.Add(order.fee.Amount))
-		minLPFee := amountDec.Mul(lp.minFeePercentage).RoundInt()
+		minLPFee := amountDec.Mul(rollapp.minFeePercentage).RoundInt()
 		lpFee := order.fee.Amount.Sub(operatorFee)
 
 		if lpFee.LT(minLPFee) {
@@ -388,18 +397,18 @@ func (or *orderTracker) filterLPsForOrder(order *demandOrder) []*lp {
 	return lps
 }
 
-func selectBestLP(lps []*lp) *lp {
+func selectBestLP(lps []*lp, rollappID string) *lp {
 	if len(lps) == 0 {
 		return nil
 	}
 
 	sort.Slice(lps, func(i, j int) bool {
 		// first criterion: settlementValidated (false comes before true)
-		if lps[i].settlementValidated != lps[j].settlementValidated {
-			return !lps[i].settlementValidated && lps[j].settlementValidated
+		if lps[i].rollapps[rollappID].settlementValidated != lps[j].rollapps[rollappID].settlementValidated {
+			return !lps[i].rollapps[rollappID].settlementValidated && lps[j].rollapps[rollappID].settlementValidated
 		}
 		// second criterion: higher operatorFeeShare
-		return lps[i].operatorFeeShare.GT(lps[j].operatorFeeShare)
+		return lps[i].rollapps[rollappID].operatorFeeShare.GT(lps[j].rollapps[rollappID].operatorFeeShare)
 	})
 
 	return lps[0]

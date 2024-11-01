@@ -11,16 +11,20 @@ import (
 )
 
 type lp struct {
-	address             string
-	rollapps            map[string]bool
+	address       string
+	rollapps      map[string]rollappCriteria
+	bmu           sync.Mutex
+	balance       sdk.Coins
+	reservedFunds sdk.Coins
+}
+
+type rollappCriteria struct {
+	rollappID           string
 	denoms              map[string]bool
 	maxPrice            sdk.Coins
 	minFeePercentage    sdk.Dec
 	operatorFeeShare    sdk.Dec
 	settlementValidated bool
-	bmu                 sync.Mutex
-	balance             sdk.Coins
-	reservedFunds       sdk.Coins
 }
 
 func (l *lp) getBalance() sdk.Coins {

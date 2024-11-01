@@ -61,7 +61,7 @@ policy.json
             dymd tx eibc grant <POLICY_ADDRESS> \
                       --from lp_key --keyring-backend test \
                       --spend-limit 10000adym \
-                      --rollapps "rollapp1,rollapp2" \ 
+                      --rollapp rollapp1 \ 
                       --denoms "adym,uatom" \
                       --min-lp-fee-percentage "0.1" \
                       --max-price 10000adym \
