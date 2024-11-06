@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -138,22 +136,12 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 			continue
 		}
 
-		var blockHeight uint64
-		if order.BlockHeight != "" {
-			blockHeight, err = strconv.ParseUint(order.BlockHeight, 10, 64)
-			if err != nil {
-				p.logger.Error("failed to parse block height", zap.Error(err))
-				continue
-			}
-		}
-
 		newOrder := &demandOrder{
-			id:          order.EibcOrderId,
-			amount:      amount,
-			fee:         fee,
-			denom:       denom,
-			rollappId:   order.RollappId,
-			blockHeight: blockHeight,
+			id:        order.EibcOrderId,
+			amount:    amount,
+			fee:       fee,
+			denom:     denom,
+			rollappId: order.RollappId,
 		}
 
 		if !p.canFulfillOrder(newOrder) {
@@ -163,9 +151,6 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 		orders = append(orders, newOrder)
 	}
 
-	sort.Slice(orders, func(i, j int) bool {
-		return orders[i].blockHeight < orders[j].blockHeight
-	})
 	return orders
 }
 

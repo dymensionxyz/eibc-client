@@ -151,6 +151,10 @@ func (or *orderTracker) checkFeePercentage(order *demandOrder) bool {
 		return false
 	}
 
+	if order.rollappId == "" {
+		return true // BYPASS FOR OLD ORDERS
+	}
+
 	chainMinPercentage, ok := or.fulfillCriteria.MinFeePercentage.Chain[order.rollappId]
 	if !ok {
 		return false

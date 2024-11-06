@@ -12,14 +12,13 @@ type orderBatch struct {
 }
 
 type demandOrder struct {
-	id          string
-	denom       string
-	amount      sdk.Coins
-	fee         sdk.Coins
-	feeStr      string
-	rollappId   string
-	status      string
-	blockHeight uint64
+	id        string
+	denom     string
+	amount    sdk.Coins
+	fee       sdk.Coins
+	feeStr    string
+	rollappId string
+	status    string
 }
 
 func (o *demandOrder) feePercentage() float32 {

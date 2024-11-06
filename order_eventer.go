@@ -93,7 +93,6 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 
 	prices := res.Events[createdEvent+".price"]
 	fees := res.Events[createdEvent+".fee"]
-	statuses := res.Events[createdEvent+".packet_status"]
 	rollapps := res.Events[createdEvent+".rollapp_id"]
 	newOrders := make([]*demandOrder, 0, len(ids))
 
@@ -115,9 +114,7 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 			denom:     price.GetDenomByIndex(0),
 			amount:    price,
 			fee:       fee,
-			status:    statuses[i],
 			rollappId: rollapps[i],
-			// blockHeight: height,
 		}
 
 		if !e.canFulfillOrder(order) {
