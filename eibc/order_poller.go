@@ -1,4 +1,4 @@
-package main
+package eibc
 
 import (
 	"context"
@@ -12,43 +12,39 @@ import (
 	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 	"go.uber.org/zap"
+
+	"github.com/dymensionxyz/eibc-client/config"
 )
 
 type orderPoller struct {
-	client        cosmosclient.Client
+	chainID       string
 	indexerURL    string
 	interval      time.Duration
 	indexerClient *http.Client
 	logger        *zap.Logger
 
-	batchSize       int
-	newOrders       chan []*demandOrder
-	canFulfillOrder func(*demandOrder) bool
+	getOrders    func() ([]Order, error)
+	orderTracker *orderTracker
 	sync.Mutex
-	pathMap map[string]string
 }
 
 func newOrderPoller(
-	client cosmosclient.Client,
-	canFulfillOrder func(*demandOrder) bool,
-	pollingCfg OrderPollingConfig,
-	batchSize int,
-	newOrders chan []*demandOrder,
+	chainID string,
+	orderTracker *orderTracker,
+	pollingCfg config.OrderPollingConfig,
 	logger *zap.Logger,
 ) *orderPoller {
-	return &orderPoller{
-		client:          client,
-		indexerURL:      pollingCfg.IndexerURL,
-		interval:        pollingCfg.Interval,
-		batchSize:       batchSize,
-		logger:          logger.With(zap.String("module", "order-poller")),
-		newOrders:       newOrders,
-		canFulfillOrder: canFulfillOrder,
-		pathMap:         make(map[string]string),
-		indexerClient:   &http.Client{Timeout: 25 * time.Second},
+	o := &orderPoller{
+		chainID:       chainID,
+		indexerURL:    pollingCfg.IndexerURL,
+		interval:      pollingCfg.Interval,
+		logger:        logger.With(zap.String("module", "order-poller")),
+		orderTracker:  orderTracker,
+		indexerClient: &http.Client{Timeout: 25 * time.Second},
 	}
+	o.getOrders = o.getDemandOrdersFromIndexer
+	return o
 }
 
 const (
@@ -71,7 +67,11 @@ type ordersResponse struct {
 	} `json:"data"`
 }
 
-func (p *orderPoller) start(ctx context.Context) {
+func (p *orderPoller) start(ctx context.Context) error {
+	if err := p.pollPendingDemandOrders(); err != nil {
+		return fmt.Errorf("failed to refresh demand orders: %w", err)
+	}
+
 	go func() {
 		for c := time.Tick(p.interval); ; <-c {
 			select {
@@ -84,34 +84,33 @@ func (p *orderPoller) start(ctx context.Context) {
 			}
 		}
 	}()
+	return nil
 }
 
 func (p *orderPoller) pollPendingDemandOrders() error {
-	demandOrders, err := p.getDemandOrdersFromIndexer()
+	demandOrders, err := p.getOrders()
 	if err != nil {
 		return fmt.Errorf("failed to get demand orders: %w", err)
 	}
 
-	orders := p.convertOrders(demandOrders)
-	batch := make([]*demandOrder, 0, p.batchSize)
-	ids := make([]string, 0, len(orders))
+	newOrders := p.convertOrders(demandOrders)
 
-	for _, order := range orders {
-		batch = append(batch, order)
-		ids = append(ids, order.id)
-
-		if len(batch) >= p.batchSize || len(batch) == len(orders) {
-			p.newOrders <- batch
-			batch = make([]*demandOrder, 0, p.batchSize)
-			ids = make([]string, 0, len(orders))
-
-			if p.logger.Level() <= zap.DebugLevel {
-				p.logger.Debug("new orders batch", zap.Strings("count", ids))
-			} else {
-				p.logger.Info("new orders batch", zap.Int("count", len(ids)))
-			}
-		}
+	if len(newOrders) == 0 {
+		p.logger.Debug("no new orders")
+		return nil
 	}
+
+	if p.logger.Level() <= zap.DebugLevel {
+		ids := make([]string, 0, len(newOrders))
+		for _, order := range newOrders {
+			ids = append(ids, order.id)
+		}
+		p.logger.Debug("new demand orders", zap.Strings("ids", ids))
+	} else {
+		p.logger.Info("new demand orders", zap.Int("count", len(newOrders)))
+	}
+
+	p.orderTracker.addOrder(newOrders...)
 
 	return nil
 }
@@ -123,40 +122,47 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 			continue
 		}
 
-		fee, err := sdk.ParseCoinsNormalized(order.Fee)
+		fee, err := sdk.ParseCoinNormalized(order.Fee)
 		if err != nil {
 			p.logger.Error("failed to parse fee", zap.Error(err))
 			continue
 		}
 
-		denom := fee.GetDenomByIndex(0)
-
-		amountStr := fmt.Sprintf("%s%s", order.Amount, denom)
+		amountStr := fmt.Sprintf("%s%s", order.Amount, fee.Denom)
 		amount, err := sdk.ParseCoinsNormalized(amountStr)
 		if err != nil {
 			p.logger.Error("failed to parse amount", zap.Error(err))
 			continue
 		}
 
-		var blockHeight uint64
+		var blockHeight int64
 		if order.BlockHeight != "" {
-			blockHeight, err = strconv.ParseUint(order.BlockHeight, 10, 64)
+			blockHeight, err = strconv.ParseInt(order.BlockHeight, 10, 64)
 			if err != nil {
 				p.logger.Error("failed to parse block height", zap.Error(err))
 				continue
 			}
 		}
 
+		validationWaitTime := p.orderTracker.validation.ValidationWaitTime
+		validDeadline := time.Now().Add(validationWaitTime)
+
 		newOrder := &demandOrder{
-			id:          order.EibcOrderId,
-			amount:      amount,
-			fee:         fee,
-			denom:       denom,
-			rollappId:   order.RollappId,
-			blockHeight: blockHeight,
+			id:            order.EibcOrderId,
+			amount:        amount,
+			fee:           fee,
+			denom:         fee.Denom,
+			rollappId:     order.RollappId,
+			proofHeight:   blockHeight,
+			validDeadline: validDeadline,
 		}
 
-		if !p.canFulfillOrder(newOrder) {
+		if !p.orderTracker.canFulfillOrder(newOrder) {
+			continue
+		}
+
+		if err := p.orderTracker.findLPForOrder(newOrder); err != nil {
+			p.logger.Warn("failed to find LP for order", zap.Error(err), zap.String("order_id", newOrder.id))
 			continue
 		}
 
@@ -164,7 +170,7 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 	}
 
 	sort.Slice(orders, func(i, j int) bool {
-		return orders[i].blockHeight < orders[j].blockHeight
+		return orders[i].proofHeight < orders[j].proofHeight
 	})
 	return orders
 }
@@ -172,7 +178,7 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 func (p *orderPoller) getDemandOrdersFromIndexer() ([]Order, error) {
 	p.logger.Debug("getting demand orders from indexer")
 
-	queryStr := fmt.Sprintf(ordersQuery, p.client.Context().ChainID)
+	queryStr := fmt.Sprintf(ordersQuery, p.chainID)
 	body := strings.NewReader(queryStr)
 
 	resp, err := p.indexerClient.Post(p.indexerURL, "application/json", body)

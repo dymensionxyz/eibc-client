@@ -2,91 +2,97 @@ package types
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 
 	errorsmod "cosmossdk.io/errors"
-	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
-
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 )
 
 var (
-	_ = sdk.Msg(&MsgFulfillOrder{})
-	_ = sdk.Msg(&MsgUpdateDemandOrder{})
+	_ = sdk.Msg(&MsgFulfillOrderAuthorized{})
+	_ = sdk.Msg(&MsgFinalizePacketByPacketKey{})
 )
 
-func NewMsgFulfillOrder(fulfillerAddress, orderId, expectedFee string) *MsgFulfillOrder {
-	return &MsgFulfillOrder{
-		FulfillerAddress: fulfillerAddress,
-		OrderId:          orderId,
-		ExpectedFee:      expectedFee,
+func NewMsgFulfillOrderAuthorized(
+	orderId,
+	rollappId,
+	granterAddress,
+	operatorFeeAddress,
+	expectedFee string,
+	price sdk.Coins,
+	operatorFeePart sdk.Dec,
+	settlementValidated bool,
+) *MsgFulfillOrderAuthorized {
+	return &MsgFulfillOrderAuthorized{
+		OrderId:             orderId,
+		RollappId:           rollappId,
+		LpAddress:           granterAddress,
+		OperatorFeeAddress:  operatorFeeAddress,
+		ExpectedFee:         expectedFee,
+		Price:               price,
+		OperatorFeeShare:    sdk.DecProto{Dec: operatorFeePart},
+		SettlementValidated: settlementValidated,
 	}
 }
 
-func (msg *MsgFulfillOrder) Route() string {
+func (msg *MsgFulfillOrderAuthorized) Route() string {
 	return RouterKey
 }
 
-func (msg *MsgFulfillOrder) Type() string {
+func (msg *MsgFulfillOrderAuthorized) Type() string {
 	return sdk.MsgTypeURL(msg)
 }
 
-func (*MsgFulfillOrder) XXX_MessageName() string {
-	return "dymensionxyz.dymension.eibc.MsgFulfillOrder"
+func (*MsgFulfillOrderAuthorized) XXX_MessageName() string {
+	return "dymensionxyz.dymension.eibc.MsgFulfillOrderAuthorized"
 }
 
-func (msg *MsgFulfillOrder) GetSigners() []sdk.AccAddress {
-	creator, err := sdk.AccAddressFromBech32(msg.FulfillerAddress)
+func (msg *MsgFulfillOrderAuthorized) GetSigners() []sdk.AccAddress {
+	creator, err := sdk.AccAddressFromBech32(msg.LpAddress)
 	if err != nil {
 		panic(err)
 	}
 	return []sdk.AccAddress{creator}
 }
 
-func (msg *MsgFulfillOrder) GetSignBytes() []byte {
+func (msg *MsgFulfillOrderAuthorized) GetSignBytes() []byte {
 	bz := ModuleCdc.MustMarshalJSON(msg)
 	return sdk.MustSortJSON(bz)
 }
 
-func (m *MsgFulfillOrder) ValidateBasic() error {
-	err := validateCommon(m.OrderId, m.FulfillerAddress, m.ExpectedFee)
+func (msg *MsgFulfillOrderAuthorized) ValidateBasic() error {
+	if msg.RollappId == "" {
+		return errorsmod.Wrap(sdkerrors.ErrInvalidRequest, "rollapp id cannot be empty")
+	}
+
+	err := validateCommon(msg.OrderId, msg.ExpectedFee, msg.OperatorFeeAddress, msg.LpAddress)
 	if err != nil {
 		return errorsmod.Wrap(sdkerrors.ErrInvalidRequest, err.Error())
 	}
-	return nil
-}
 
-func (m *MsgFulfillOrder) GetFulfillerBech32Address() []byte {
-	return sdk.MustAccAddressFromBech32(m.FulfillerAddress)
-}
-
-func NewMsgUpdateDemandOrder(ownerAddr, orderId, newFee string) *MsgUpdateDemandOrder {
-	return &MsgUpdateDemandOrder{
-		OrderId:      orderId,
-		OwnerAddress: ownerAddr,
-		NewFee:       newFee,
+	if msg.Price.IsAnyNegative() {
+		return errorsmod.Wrap(sdkerrors.ErrInvalidRequest, "price cannot be negative")
 	}
-}
 
-func (m *MsgUpdateDemandOrder) GetSigners() []sdk.AccAddress {
-	creator, err := sdk.AccAddressFromBech32(m.OwnerAddress)
-	if err != nil {
-		panic(err)
+	if msg.OperatorFeeShare.Dec.IsNegative() {
+		return errorsmod.Wrap(sdkerrors.ErrInvalidRequest, "operator fee share cannot be negative")
 	}
-	return []sdk.AccAddress{creator}
-}
 
-func (m *MsgUpdateDemandOrder) ValidateBasic() error {
-	err := validateCommon(m.OrderId, m.OwnerAddress, m.NewFee)
-	if err != nil {
-		return errorsmod.Wrap(sdkerrors.ErrInvalidRequest, err.Error())
+	if msg.OperatorFeeShare.Dec.GT(sdk.OneDec()) {
+		return errorsmod.Wrap(sdkerrors.ErrInvalidRequest, "operator fee share cannot be greater than 1")
 	}
 
 	return nil
 }
 
-func (m *MsgUpdateDemandOrder) GetSignerAddr() sdk.AccAddress {
-	return sdk.MustAccAddressFromBech32(m.OwnerAddress)
+func (msg *MsgFulfillOrderAuthorized) GetLPBech32Address() []byte {
+	return sdk.MustAccAddressFromBech32(msg.LpAddress)
+}
+
+func (msg *MsgFulfillOrderAuthorized) GetOperatorFeeBech32Address() []byte {
+	return sdk.MustAccAddressFromBech32(msg.OperatorFeeAddress)
 }
 
 func isValidOrderId(orderId string) bool {
@@ -99,13 +105,16 @@ func isValidOrderId(orderId string) bool {
 	return len(hashBytes) == 32
 }
 
-func validateCommon(orderId, address, fee string) error {
+func validateCommon(orderId, fee string, address ...string) error {
 	if !isValidOrderId(orderId) {
 		return fmt.Errorf("%w: %s", ErrInvalidOrderID, orderId)
 	}
-	_, err := sdk.AccAddressFromBech32(address)
-	if err != nil {
-		return err
+
+	for _, addr := range address {
+		_, err := sdk.AccAddressFromBech32(addr)
+		if err != nil {
+			return err
+		}
 	}
 
 	feeInt, ok := sdk.NewIntFromString(fee)
@@ -118,4 +127,28 @@ func validateCommon(orderId, address, fee string) error {
 	}
 
 	return nil
+}
+
+func (m MsgFinalizePacketByPacketKey) ValidateBasic() error {
+	_, err := sdk.AccAddressFromBech32(m.Sender)
+	if err != nil {
+		return errors.Join(
+			sdkerrors.ErrInvalidAddress,
+			errorsmod.Wrapf(err, "sender must be a valid bech32 address: %s", m.Sender),
+		)
+	}
+	if len(m.PacketKey) == 0 {
+		return fmt.Errorf("packet key must be non-empty")
+	}
+
+	return nil
+}
+
+func (m MsgFinalizePacketByPacketKey) GetSigners() []sdk.AccAddress {
+	signer, _ := sdk.AccAddressFromBech32(m.Sender)
+	return []sdk.AccAddress{signer}
+}
+
+func (*MsgFinalizePacketByPacketKey) XXX_MessageName() string {
+	return "dymensionxyz.dymension.delayedack.MsgFinalizePacketByPacketKey"
 }
