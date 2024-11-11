@@ -3,6 +3,7 @@ package eibc
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"sort"
 	"sync"
 	"time"
@@ -343,6 +344,11 @@ func (or *orderTracker) findLPForOrder(order *demandOrder) error {
 		return fmt.Errorf("no LPs found for order")
 	}
 
+	// randomize the list of LPs to avoid always selecting the same one
+	// this is important for the case where multiple LPs have the same operatorFeeShare
+	// and the same settlementValidated status
+	shuffleLPs(lps)
+
 	bestLP := selectBestLP(lps, order.rollappId)
 	if bestLP == nil {
 		return fmt.Errorf("LP not found")
@@ -356,6 +362,12 @@ func (or *orderTracker) findLPForOrder(order *demandOrder) error {
 	bestLP.reserveFunds(order.amount)
 
 	return nil
+}
+
+func shuffleLPs(lps []*lp) {
+	rand.Shuffle(len(lps), func(i, j int) {
+		lps[i], lps[j] = lps[j], lps[i]
+	})
 }
 
 func (or *orderTracker) filterLPsForOrder(order *demandOrder) []*lp {
