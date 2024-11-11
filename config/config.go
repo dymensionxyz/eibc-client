@@ -84,8 +84,8 @@ type ValidationLevel string
 
 const (
 	ValidationModeSequencer  ValidationLevel = "sequencer"
-	ValidationModeP2P                        = "p2p"
-	ValidationModeSettlement                 = "settlement"
+	ValidationModeP2P        ValidationLevel = "p2p"
+	ValidationModeSettlement ValidationLevel = "settlement"
 )
 
 func (f ValidationLevel) Validate() bool {

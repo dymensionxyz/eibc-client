@@ -4,9 +4,8 @@ import "sync"
 
 // orderPool is the order pool used for tracking orders that are waiting to be fulfilled
 type orderPool struct {
-	opmu          sync.Mutex
-	orders        map[string]*demandOrder
-	addOrdersHook chan []*demandOrder
+	opmu   sync.Mutex
+	orders map[string]*demandOrder
 }
 
 func (op *orderPool) addOrder(order ...*demandOrder) {
@@ -51,22 +50,4 @@ func (op *orderPool) popOrders(limit int) []*demandOrder {
 	}
 
 	return orders
-}
-
-func (op *orderPool) getOrder(id string) *demandOrder {
-	op.opmu.Lock()
-	defer op.opmu.Unlock()
-
-	return op.orders[id]
-}
-
-func (op *orderPool) getOrders() (orders []*demandOrder) {
-	op.opmu.Lock()
-	defer op.opmu.Unlock()
-
-	for _, order := range op.orders {
-		orders = append(orders, order)
-	}
-
-	return
 }

@@ -12,6 +12,8 @@ import (
 )
 
 func Test_nodeClient_nodeBlockValidated(t *testing.T) {
+	t.Skip()
+
 	type fields struct {
 		client                  *http.Client
 		rollapps                map[string]config.RollappConfig

@@ -5,9 +5,7 @@ import (
 	"log"
 	"os"
 	"strconv"
-	"strings"
 
-	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/mitchellh/go-homedir"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -168,51 +166,6 @@ var versionCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println(version.BuildVersion)
 	},
-}
-
-func printAccountSlot(address string, accPref, dividerItem string) {
-	dividerAcc := ""
-
-	fmt.Printf("%s", dividerItem)
-
-	accLine := fmt.Sprintf("\n %s%s |", accPref, address)
-	for i := 0; i < len(accLine)-1; i++ {
-		dividerAcc += "-"
-	}
-	fmt.Printf("%s\n", accLine)
-	fmt.Printf("%s\n", dividerAcc)
-}
-
-func printBalances(balances sdk.Coins, maxBal, maxDen int) {
-	dividerBal, dividerDen := "", ""
-
-	for i := 0; i < maxBal; i++ {
-		dividerBal += "-"
-	}
-
-	for i := 0; i < maxDen; i++ {
-		dividerDen += "-"
-	}
-
-	fmt.Printf("%*s | Denom\n", maxBal, "Amount")
-	fmt.Printf("%*s | %s\n", maxBal, dividerBal, dividerDen)
-
-	for _, bl := range balances {
-		amtStr := bl.Amount.String()
-
-		if bl.Denom == "adym" {
-			amtStr = formatAmount(bl.Amount.String())
-			bl.Denom = "dym"
-		}
-		fmt.Printf("%*s | %-s\n", maxBal, amtStr, bl.Denom)
-	}
-}
-
-func formatAmount(numStr string) string {
-	if len(numStr) <= 18 {
-		return "0," + strings.Repeat("0", 18-len(numStr)) + numStr
-	}
-	return numStr[:len(numStr)-18] + "," + numStr[len(numStr)-18:]
 }
 
 func init() {

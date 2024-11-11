@@ -202,9 +202,7 @@ func TestOrderClient(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var fulfilledOrders []*demandOrder
 			fulfillOrdersFn := func(demandOrder ...*demandOrder) error {
-				for _, o := range demandOrder {
-					fulfilledOrders = append(fulfilledOrders, o)
-				}
+				fulfilledOrders = append(fulfilledOrders, demandOrder...)
 				return nil
 			}
 

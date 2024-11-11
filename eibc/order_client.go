@@ -90,7 +90,7 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 	operatorName := cfg.Operator.AccountName
 	operatorAddress, err := operatorClient.Address(operatorName)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get operator address: %w", err)
 	}
 
 	botClientCfg := config.ClientConfig{

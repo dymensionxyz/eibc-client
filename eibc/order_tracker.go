@@ -103,20 +103,24 @@ func (or *orderTracker) refreshLPs(ctx context.Context) error {
 		return fmt.Errorf("failed to load LPs: %w", err)
 	}
 
-	go func() {
-		t := time.NewTicker(5 * time.Minute)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				if err := or.loadLPs(ctx); err != nil {
-					or.logger.Error("failed to load LPs", zap.Error(err))
-				}
+	go or.lpLoader(ctx)
+	go or.balanceRefresher(ctx)
+
+	return nil
+}
+
+func (or *orderTracker) lpLoader(ctx context.Context) {
+	t := time.NewTicker(5 * time.Minute)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := or.loadLPs(ctx); err != nil {
+				or.logger.Error("failed to load LPs", zap.Error(err))
 			}
 		}
-	}()
-	return nil
+	}
 }
 
 func (or *orderTracker) loadLPs(ctx context.Context) error {

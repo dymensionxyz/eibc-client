@@ -27,12 +27,6 @@ type rollappCriteria struct {
 	settlementValidated bool
 }
 
-func (l *lp) getBalance() sdk.Coins {
-	l.bmu.Lock()
-	defer l.bmu.Unlock()
-	return l.balance
-}
-
 func (l *lp) hasBalance(amount sdk.Coins) bool {
 	return l.spendableBalance().IsAllGTE(amount)
 }
