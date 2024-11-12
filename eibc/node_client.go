@@ -29,7 +29,8 @@ type blockValidatedResponse struct {
 type JSONResponse struct {
 	Jsonrpc string `json:"jsonrpc"`
 	Result  struct {
-		Result string `json:"Result"`
+		ChainID string `json:"ChainID"`
+		Result  string `json:"Result"`
 	} `json:"result"`
 	Id int `json:"id"`
 }
@@ -45,10 +46,16 @@ const (
 func newNodeClient(rollapps map[string]config.RollappConfig) (*nodeClient, error) {
 	for rollappID, cfg := range rollapps {
 		if cfg.MinConfirmations == 0 {
-			return nil, fmt.Errorf("rollapp ID %s: minimum validated nodes must be greater than 0", rollappID)
+			return nil, fmt.Errorf(
+				"rollapp ID %s: minimum validated nodes must be greater than 0",
+				rollappID,
+			)
 		}
 		if len(cfg.FullNodes) < cfg.MinConfirmations {
-			return nil, fmt.Errorf("rollapp ID %s: not enough locations to validate blocks", rollappID)
+			return nil, fmt.Errorf(
+				"rollapp ID %s: not enough locations to validate blocks",
+				rollappID,
+			)
 		}
 	}
 	n := &nodeClient{
@@ -65,7 +72,12 @@ const (
 	blockValidatedPath = "/block_validated"
 )
 
-func (c *nodeClient) BlockValidated(ctx context.Context, rollappID string, height int64, expectedValidationLevel validationLevel) (bool, error) {
+func (c *nodeClient) BlockValidated(
+	ctx context.Context,
+	rollappID string,
+	height int64,
+	expectedValidationLevel validationLevel,
+) (bool, error) {
 	var validatedNodes int32
 	var wg sync.WaitGroup
 	rollappConfig := c.rollapps[rollappID]
@@ -75,7 +87,13 @@ func (c *nodeClient) BlockValidated(ctx context.Context, rollappID string, heigh
 		wg.Add(1)
 		go func(ctx context.Context, rollappID, location string) {
 			defer wg.Done()
-			valid, err := c.nodeBlockValidated(ctx, rollappID, location, height, expectedValidationLevel)
+			valid, err := c.nodeBlockValidated(
+				ctx,
+				rollappID,
+				location,
+				height,
+				expectedValidationLevel,
+			)
 			if err != nil {
 				errChan <- err
 				return
@@ -110,7 +128,12 @@ func (c *nodeClient) nodeBlockValidated(
 	}
 
 	if validated.ChainID != rollappID {
-		return false, fmt.Errorf("invalid chain ID! want: %s, got: %s, height: %d", rollappID, validated.ChainID, height)
+		return false, fmt.Errorf(
+			"invalid chain ID! want: %s, got: %s, height: %d",
+			rollappID,
+			validated.ChainID,
+			height,
+		)
 	}
 
 	return validated.Result >= expectedValidationLevel, nil
@@ -137,7 +160,8 @@ func (c *nodeClient) getHttp(ctx context.Context, url string) (*blockValidatedRe
 		return nil, fmt.Errorf("failed to parse result: %w", err)
 	}
 	blockValidated := &blockValidatedResponse{
-		Result: validationLevel(result),
+		ChainID: jsonResp.Result.ChainID,
+		Result:  validationLevel(result),
 	}
 	return blockValidated, err
 }
