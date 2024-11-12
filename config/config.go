@@ -4,11 +4,10 @@ import (
 	"log"
 	"time"
 
+	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 	"github.com/ignite/cli/ignite/pkg/cosmosaccount"
 	"github.com/mitchellh/go-homedir"
 	"github.com/spf13/viper"
-
-	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 )
 
 type Config struct {
@@ -64,7 +63,6 @@ type RollappConfig struct {
 
 const (
 	defaultNodeAddress = "http://localhost:36657"
-	defaultDBPath      = "mongodb://localhost:27017"
 	HubAddressPrefix   = "dym"
 	PubKeyPrefix       = "pub"
 	defaultLogLevel    = "info"
@@ -72,12 +70,16 @@ const (
 	defaultGasFees     = "3000000000000000" + defaultHubDenom
 	testKeyringBackend = "test"
 
-	BotNamePrefix               = "bot-"
-	defaultOperatorAccountName  = "client"
-	defaultNumberOfBots         = 30
-	NewOrderBufferSize          = 100
-	defaultMaxOrdersPerTx       = 10
-	defaultOrderRefreshInterval = 30 * time.Second
+	BotNamePrefix                  = "bot-"
+	defaultOperatorAccountName     = "client"
+	defaultOperatorGroupID         = 1
+	defaultOperatorMinFeeShare     = 0.1
+	defaultNumberOfBots            = 30
+	NewOrderBufferSize             = 100
+	defaultMaxOrdersPerTx          = 10
+	defaultOrderRefreshInterval    = 30 * time.Second
+	defaultValidationFallbackLevel = "p2p"
+	defaultValidationWaitTime      = "60m"
 )
 
 type ValidationLevel string
@@ -101,11 +103,10 @@ func InitConfig() {
 	}
 	defaultHomeDir := home + "/.eibc-client"
 
-	viper.SetDefault("server_address", ":8000")
 	viper.SetDefault("log_level", defaultLogLevel)
 	viper.SetDefault("node_address", defaultNodeAddress)
-	viper.SetDefault("db_path", defaultDBPath)
 
+	viper.SetDefault("order_polling.interval", "<indexer_url>")
 	viper.SetDefault("order_polling.interval", defaultOrderRefreshInterval)
 	viper.SetDefault("order_polling.enabled", false)
 
@@ -114,11 +115,20 @@ func InitConfig() {
 	viper.SetDefault("operator.account_name", defaultOperatorAccountName)
 	viper.SetDefault("operator.keyring_backend", testKeyringBackend)
 	viper.SetDefault("operator.keyring_dir", defaultHomeDir)
+	viper.SetDefault("operator.group_id", defaultOperatorGroupID)
+	viper.SetDefault("operator.min_fee_share", defaultOperatorMinFeeShare)
 
 	viper.SetDefault("bots.keyring_backend", testKeyringBackend)
 	viper.SetDefault("bots.keyring_dir", defaultHomeDir)
 	viper.SetDefault("bots.number_of_bots", defaultNumberOfBots)
 	viper.SetDefault("bots.max_orders_per_tx", defaultMaxOrdersPerTx)
+	viper.SetDefault("bots.policy_address", "<your-policy-address>")
+
+	viper.SetDefault("validation.fallback_level", defaultValidationFallbackLevel)
+	viper.SetDefault("validation.validation_wait_time", defaultValidationWaitTime)
+
+	viper.SetDefault("rollapps.example_1234-1.full_nodes", []string{"http://localhost:26657"})
+	viper.SetDefault("rollapps.example_1234-1.min_confirmations", "1")
 
 	viper.SetDefault("slack.enabled", false)
 	viper.SetDefault("slack.app_token", "<your-slack-app-token>")
