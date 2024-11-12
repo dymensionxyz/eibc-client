@@ -151,19 +151,19 @@ func TestOrderClient(t *testing.T) {
 					Amount:      "80",
 					Fee:         "12stake",
 					RollappId:   "rollapp1",
-					BlockHeight: "1",
+					ProofHeight: "1",
 				}, {
 					EibcOrderId: "order2",
 					Amount:      "202",
 					Fee:         "25stake",
 					RollappId:   "rollapp2",
-					BlockHeight: "2",
+					ProofHeight: "2",
 				}, {
 					EibcOrderId: "order5",
 					Amount:      "201",
 					Fee:         "50stake",
 					RollappId:   "rollapp1",
-					BlockHeight: "5",
+					ProofHeight: "5",
 				},
 			},
 			eventOrders: []Order{
@@ -172,19 +172,19 @@ func TestOrderClient(t *testing.T) {
 					Amount:      "100adym",
 					Fee:         "20adym",
 					RollappId:   "rollapp2",
-					BlockHeight: "3",
+					ProofHeight: "3",
 				}, {
 					EibcOrderId: "order4",
 					Amount:      "250adym",
 					Fee:         "35adym",
 					RollappId:   "rollapp2",
-					BlockHeight: "4",
+					ProofHeight: "4",
 				}, {
 					EibcOrderId: "order6",
 					Amount:      "250adym",
 					Fee:         "35adym",
 					RollappId:   "rollapp2",
-					BlockHeight: "6",
+					ProofHeight: "6",
 				},
 			},
 			expectLPFulfilledOrderIDs: map[string]string{
@@ -253,7 +253,7 @@ func TestOrderClient(t *testing.T) {
 						createdEvent + ".packet_status": {"PENDING"},
 						createdEvent + ".fee":           {order.Fee},
 						createdEvent + ".rollapp_id":    {order.RollappId},
-						createdEvent + ".proof_height":  {order.BlockHeight},
+						createdEvent + ".proof_height":  {order.ProofHeight},
 					},
 				}
 			}

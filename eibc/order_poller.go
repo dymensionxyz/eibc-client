@@ -48,7 +48,7 @@ func newOrderPoller(
 }
 
 const (
-	ordersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: {equalTo: EibcPending}}) {nodes { eibcOrderId amount destinationChannel blockHeight rollappId eibcFee }}}"}`
+	ordersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: {equalTo: EibcPending}}) {nodes { eibcOrderId amount destinationChannel proofHeight rollappId eibcFee }}}"}`
 )
 
 type Order struct {
@@ -56,7 +56,7 @@ type Order struct {
 	Amount      string `json:"amount"`
 	Fee         string `json:"eibcFee"`
 	RollappId   string `json:"rollappId"`
-	BlockHeight string `json:"blockHeight"`
+	ProofHeight string `json:"proofHeight"`
 }
 
 type ordersResponse struct {
@@ -135,11 +135,11 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 			continue
 		}
 
-		var blockHeight int64
-		if order.BlockHeight != "" {
-			blockHeight, err = strconv.ParseInt(order.BlockHeight, 10, 64)
+		var proofHeight int64
+		if order.ProofHeight != "" {
+			proofHeight, err = strconv.ParseInt(order.ProofHeight, 10, 64)
 			if err != nil {
-				p.logger.Error("failed to parse block height", zap.Error(err))
+				p.logger.Error("failed to parse proof height", zap.Error(err))
 				continue
 			}
 		}
@@ -153,7 +153,7 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 			fee:           fee,
 			denom:         fee.Denom,
 			rollappId:     order.RollappId,
-			proofHeight:   blockHeight,
+			proofHeight:   proofHeight,
 			validDeadline: validDeadline,
 		}
 
