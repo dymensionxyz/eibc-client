@@ -14,11 +14,10 @@ import (
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	"github.com/cosmos/cosmos-sdk/x/feegrant"
 	"github.com/cosmos/cosmos-sdk/x/group"
+	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/status"
-
-	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 
 	"github.com/dymensionxyz/eibc-client/config"
 )
@@ -45,7 +44,7 @@ func addAccount(client cosmosclient.Client, name string) (string, error) {
 	return address.String(), nil
 }
 
-func getBotAccounts(client cosmosclient.Client) (accs []account, err error) {
+func getFulfillerAccounts(client cosmosclient.Client) (accs []account, err error) {
 	var accounts []account
 	accounts, err = listAccounts(client)
 	if err != nil {
@@ -53,7 +52,7 @@ func getBotAccounts(client cosmosclient.Client) (accs []account, err error) {
 	}
 
 	for _, acc := range accounts {
-		if !strings.HasPrefix(acc.Name, config.BotNamePrefix) {
+		if !strings.HasPrefix(acc.Name, config.FulfillerNamePrefix) {
 			continue
 		}
 		accs = append(accs, acc)
@@ -83,15 +82,15 @@ func listAccounts(client cosmosclient.Client) ([]account, error) {
 	return accounts, nil
 }
 
-func createBotAccounts(client cosmosclient.Client, count int) (accs []account, err error) {
+func createFulfillerAccounts(client cosmosclient.Client, count int) (accs []account, err error) {
 	for range count {
-		botName := fmt.Sprintf("%s%s", config.BotNamePrefix, uuid.New().String()[0:5])
-		addr, err := addAccount(client, botName)
+		fulfillerName := fmt.Sprintf("%s%s", config.FulfillerNamePrefix, uuid.New().String()[0:5])
+		addr, err := addAccount(client, fulfillerName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create account: %w", err)
 		}
 		acc := account{
-			Name:    botName,
+			Name:    fulfillerName,
 			Address: addr,
 		}
 		accs = append(accs, acc)
@@ -155,38 +154,38 @@ func waitForTx(client cosmosClient, txHash string) (*tx.GetTxResponse, error) {
 	}
 }
 
-func addBotAccounts(numBots int, clientConfig config.ClientConfig, logger *zap.Logger) ([]account, error) {
-	cosmosClient, err := cosmosclient.New(config.GetCosmosClientOptions(clientConfig)...)
+func addFulfillerAccounts(scale int, clientConfig config.ClientConfig, logger *zap.Logger) ([]account, error) {
+	cClient, err := cosmosclient.New(config.GetCosmosClientOptions(clientConfig)...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cosmos client for bot: %w", err)
+		return nil, fmt.Errorf("failed to create cosmos client for fulfiller: %w", err)
 	}
 
-	accs, err := getBotAccounts(cosmosClient)
+	accs, err := getFulfillerAccounts(cClient)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get bot accounts: %w", err)
+		return nil, fmt.Errorf("failed to get fulfiller accounts: %w", err)
 	}
 
-	numFoundBots := len(accs)
+	numFoundFulfillers := len(accs)
 
-	botsAccountsToCreate := max(0, numBots) - numFoundBots
-	if botsAccountsToCreate > 0 {
-		logger.Info("creating bot accounts", zap.Int("accounts", botsAccountsToCreate))
+	fulfillersAccountsToCreate := max(0, scale) - numFoundFulfillers
+	if fulfillersAccountsToCreate > 0 {
+		logger.Info("creating fulfiller accounts", zap.Int("accounts", fulfillersAccountsToCreate))
 	}
 
-	newAccs, err := createBotAccounts(cosmosClient, botsAccountsToCreate)
+	newAccs, err := createFulfillerAccounts(cClient, fulfillersAccountsToCreate)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create bot accounts: %w", err)
+		return nil, fmt.Errorf("failed to create fulfiller accounts: %w", err)
 	}
 
 	accs = slices.Concat(accs, newAccs)
 
-	if len(accs) < numBots {
-		return nil, fmt.Errorf("expected %d bot accounts, got %d", numBots, len(accs))
+	if len(accs) < scale {
+		return nil, fmt.Errorf("expected %d fulfiller accounts, got %d", scale, len(accs))
 	}
 	return accs, nil
 }
 
-func addBotsToGroup(operatorName, operatorAddress string, groupID int, client cosmosclient.Client, newAccs []account) error {
+func addFulfillersToGroup(operatorName, operatorAddress string, groupID int, client cosmosclient.Client, newAccs []account) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -311,7 +310,7 @@ func hasFeeGranted(client cosmosClient, granterAddr, granteeAddr string) (bool, 
 	return false, nil
 }
 
-func addFeeGrantToBot(client cosmosClient, fromName string, granterAddr sdk.AccAddress, granteeAddr ...sdk.AccAddress) error {
+func addFeeGrantToFulfiller(client cosmosClient, fromName string, granterAddr sdk.AccAddress, granteeAddr ...sdk.AccAddress) error {
 	msgs := make([]sdk.Msg, 0, len(granteeAddr))
 	for _, addr := range granteeAddr {
 		msg, err := feegrant.NewMsgGrantAllowance(

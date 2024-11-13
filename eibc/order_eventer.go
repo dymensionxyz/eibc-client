@@ -120,12 +120,13 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 		order := &demandOrder{
 			id:            id,
 			denom:         fee.Denom,
-			amount:        price,
+			price:         price,
 			fee:           fee,
 			status:        statuses[i],
 			rollappId:     rollapps[i],
 			proofHeight:   height,
 			validDeadline: validDeadline,
+			from:          "event",
 		}
 
 		if !e.orderTracker.canFulfillOrder(order) {

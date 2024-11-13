@@ -46,15 +46,15 @@ func TestOrderClient(t *testing.T) {
 			name: "p2p mode, orders from poller: fulfilled",
 			config: config.Config{
 				OrderPolling: config.OrderPollingConfig{
-					Interval: time.Second,
+					Interval: 5 * time.Second,
 					Enabled:  true,
 				},
 				Operator: config.OperatorConfig{
 					MinFeeShare: "0.1",
 				},
-				Bots: config.BotConfig{
-					NumberOfBots:   3,
-					MaxOrdersPerTx: 4,
+				Fulfillers: config.FulfillerConfig{
+					Scale:     3,
+					BatchSize: 4,
 				},
 				Validation: config.ValidationConfig{
 					ValidationWaitTime: time.Second,
@@ -148,43 +148,43 @@ func TestOrderClient(t *testing.T) {
 			pollOrders: []Order{
 				{
 					EibcOrderId: "order1",
-					Amount:      "80",
+					Price:       "80stake",
 					Fee:         "12stake",
 					RollappId:   "rollapp1",
-					BlockHeight: "1",
+					ProofHeight: "1",
 				}, {
 					EibcOrderId: "order2",
-					Amount:      "202",
+					Price:       "202stake",
 					Fee:         "25stake",
 					RollappId:   "rollapp2",
-					BlockHeight: "2",
+					ProofHeight: "2",
 				}, {
 					EibcOrderId: "order5",
-					Amount:      "201",
+					Price:       "201stake",
 					Fee:         "50stake",
 					RollappId:   "rollapp1",
-					BlockHeight: "5",
+					ProofHeight: "5",
 				},
 			},
 			eventOrders: []Order{
 				{
 					EibcOrderId: "order3",
-					Amount:      "100adym",
+					Price:       "100adym",
 					Fee:         "20adym",
 					RollappId:   "rollapp2",
-					BlockHeight: "3",
+					ProofHeight: "3",
 				}, {
 					EibcOrderId: "order4",
-					Amount:      "250adym",
+					Price:       "250adym",
 					Fee:         "35adym",
 					RollappId:   "rollapp2",
-					BlockHeight: "4",
+					ProofHeight: "4",
 				}, {
 					EibcOrderId: "order6",
-					Amount:      "250adym",
+					Price:       "250adym",
 					Fee:         "35adym",
 					RollappId:   "rollapp2",
-					BlockHeight: "6",
+					ProofHeight: "6",
 				},
 			},
 			expectLPFulfilledOrderIDs: map[string]string{
@@ -249,11 +249,11 @@ func TestOrderClient(t *testing.T) {
 				oc.orderEventer.eventClient.(*mockNodeClient).addOrderCh <- coretypes.ResultEvent{
 					Events: map[string][]string{
 						createdEvent + ".order_id":      {order.EibcOrderId},
-						createdEvent + ".price":         {order.Amount},
+						createdEvent + ".price":         {order.Price},
 						createdEvent + ".packet_status": {"PENDING"},
 						createdEvent + ".fee":           {order.Fee},
 						createdEvent + ".rollapp_id":    {order.RollappId},
-						createdEvent + ".proof_height":  {order.BlockHeight},
+						createdEvent + ".proof_height":  {order.ProofHeight},
 					},
 				}
 			}
@@ -270,14 +270,14 @@ func TestOrderClient(t *testing.T) {
 				lpAddr, ok := tt.expectLPFulfilledOrderIDs[o.id]
 				require.True(t, ok)
 				require.Equal(t, lpAddr, o.lpAddress)
-				expectTotalLPSpent[o.lpAddress] = expectTotalLPSpent[o.lpAddress].Add(o.amount...)
+				expectTotalLPSpent[o.lpAddress] = expectTotalLPSpent[o.lpAddress].Add(o.price...)
 			}
 
 			for _, lp := range oc.orderTracker.lps {
 				assert.Truef(t, lp.reservedFunds.Empty(), "lp %s has reserved funds; got: %s", lp.address, lp.reservedFunds)
 				expectBalance := lpBalances[lp.address].Sub(expectTotalLPSpent[lp.address]...)
-				assert.Truef(t, expectBalance.IsEqual(lp.balance),
-					"lp %s balance is not correct; expect: %s, got: %s", lp.address, expectBalance, lp.balance)
+				assert.Truef(t, expectBalance.IsEqual(lp.getBalance()),
+					"lp %s balance is not correct; expect: %s, got: %s", lp.address, expectBalance, lp.getBalance())
 			}
 		})
 	}
@@ -300,8 +300,8 @@ func setupTestOrderClient(
 	// tracker
 	trackerClient := hubClient
 
-	// bots
-	bots := make(map[string]*orderFulfiller)
+	// fulfillers
+	fulfiller := make(map[string]*orderFulfiller)
 
 	ordTracker := newOrderTracker(
 		&trackerClient,
@@ -309,9 +309,8 @@ func setupTestOrderClient(
 		minOperatorFeeShare,
 		fullNodeClient,
 		fulfilledOrdersCh,
-		bots,
 		"subscriber",
-		cfg.Bots.MaxOrdersPerTx,
+		cfg.Fulfillers.BatchSize,
 		&cfg.Validation,
 		orderCh,
 		cfg.OrderPolling.Interval,
@@ -339,27 +338,30 @@ func setupTestOrderClient(
 
 	chainID := "test-chain-id"
 
-	for i := range cfg.Bots.NumberOfBots {
-		botName := fmt.Sprintf("bot-%d", i+1)
+	for i := range cfg.Fulfillers.Scale {
+		fulfillerName := fmt.Sprintf("fulfiller-%d", i+1)
 
 		hc := hubClient
 		acc := account{
-			Name:    botName,
-			Address: botName + "-address",
+			Name:    fulfillerName,
+			Address: fulfillerName + "-address",
 		}
-		b := newOrderFulfiller(
+		b, err := newOrderFulfiller(
+			acc,
+			"operatorAddress",
+			logger,
+			"policyAddress",
+			&hc,
 			orderCh,
 			fulfilledOrdersCh,
-			&hc,
-			acc,
-			"policyAddress",
-			"operatorAddress",
 			ordTracker.releaseAllReservedOrdersFunds,
 			ordTracker.debitAllReservedOrdersFunds,
-			logger,
 		)
+		if err != nil {
+			return nil, err
+		}
 		b.FulfillDemandOrders = fulfillOrdersFn
-		bots[b.account.Name] = b
+		fulfiller[b.account.Name] = b
 	}
 
 	// poller
@@ -378,7 +380,7 @@ func setupTestOrderClient(
 	oc := &orderClient{
 		orderEventer: eventer,
 		orderTracker: ordTracker,
-		bots:         bots,
+		fulfillers:   fulfiller,
 		config:       cfg,
 		logger:       logger,
 		orderPoller:  poller,
