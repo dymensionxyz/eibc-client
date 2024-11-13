@@ -89,16 +89,25 @@ func (ol *orderFulfiller) processBatch(batch []*demandOrder) error {
 		return nil
 	}
 
-	var ids []string
+	var (
+		ids   []string
+		lps   []string
+		lpMap = make(map[string]struct{})
+	)
 	for _, order := range batch {
 		ids = append(ids, order.id)
+		lpMap[order.lpAddress] = struct{}{}
 	}
 
-	ol.logger.Info("fulfilling orders", zap.Strings("ids", ids))
+	for l := range lpMap {
+		lps = append(lps, l)
+	}
+
+	ol.logger.Info("fulfilling orders", zap.Strings("ids", ids), zap.Strings("lps", lps))
 
 	if err := ol.FulfillDemandOrders(batch...); err != nil {
 		ol.releaseAllReservedOrdersFunds(batch...)
-		return fmt.Errorf("failed to fulfill orders: ids: %v; %w", ids, err)
+		return fmt.Errorf("failed to fulfill orders: ids: %v; lps: %v; %w", ids, lps, err)
 	} else {
 		ol.debitAllReservedOrdersFunds(batch...)
 	}
