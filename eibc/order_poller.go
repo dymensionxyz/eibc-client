@@ -48,12 +48,13 @@ func newOrderPoller(
 }
 
 const (
-	ordersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: {equalTo: EibcPending}}) {nodes { eibcOrderId amount destinationChannel proofHeight rollappId eibcFee }}}"}`
+	ordersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: {equalTo: EibcPending}}) {nodes { eibcOrderId amount proofHeight rollappId eibcFee }}}"}`
 )
 
 type Order struct {
 	EibcOrderId string `json:"eibcOrderId"`
 	Amount      string `json:"amount"`
+	Price       string `json:"price"`
 	Fee         string `json:"eibcFee"`
 	RollappId   string `json:"rollappId"`
 	ProofHeight string `json:"proofHeight"`
@@ -128,8 +129,7 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 			continue
 		}
 
-		amountStr := fmt.Sprintf("%s%s", order.Amount, fee.Denom)
-		amount, err := sdk.ParseCoinsNormalized(amountStr)
+		price, err := sdk.ParseCoinsNormalized(order.Price)
 		if err != nil {
 			p.logger.Error("failed to parse amount", zap.Error(err))
 			continue
@@ -149,12 +149,13 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 
 		newOrder := &demandOrder{
 			id:            order.EibcOrderId,
-			amount:        amount,
+			price:         price,
 			fee:           fee,
 			denom:         fee.Denom,
 			rollappId:     order.RollappId,
 			proofHeight:   proofHeight,
 			validDeadline: validDeadline,
+			from:          "indexer",
 		}
 
 		if !p.orderTracker.canFulfillOrder(newOrder) {

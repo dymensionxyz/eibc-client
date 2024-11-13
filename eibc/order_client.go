@@ -15,9 +15,9 @@ import (
 )
 
 type orderClient struct {
-	logger *zap.Logger
-	config config.Config
-	bots   map[string]*orderFulfiller
+	logger     *zap.Logger
+	config     config.Config
+	fulfillers map[string]*orderFulfiller
 
 	orderEventer *orderEventer
 	orderPoller  *orderPoller
@@ -44,8 +44,8 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 		return nil, fmt.Errorf("failed to create full node clients: %w", err)
 	}
 
-	// create bots
-	bots := make(map[string]*orderFulfiller)
+	// create fulfillers
+	fulfillers := make(map[string]*orderFulfiller)
 
 	minOperatorFeeShare, err := sdk.NewDecFromStr(cfg.Operator.MinFeeShare)
 	if err != nil {
@@ -54,13 +54,12 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 
 	ordTracker := newOrderTracker(
 		hubClient,
-		cfg.Bots.PolicyAddress,
+		cfg.Fulfillers.PolicyAddress,
 		minOperatorFeeShare,
 		fullNodeClient,
 		fulfilledOrdersCh,
-		bots,
 		subscriberID,
-		cfg.Bots.MaxOrdersPerTx,
+		cfg.Fulfillers.BatchSize,
 		&cfg.Validation,
 		orderCh,
 		cfg.OrderPolling.Interval, // we can use the same interval for order polling and LP balance checking
@@ -84,7 +83,7 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 
 	operatorClient, err := cosmosclient.New(config.GetCosmosClientOptions(operatorClientCfg)...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cosmos client for bot: %w", err)
+		return nil, fmt.Errorf("failed to create cosmos client for fulfiller: %w", err)
 	}
 
 	operatorName := cfg.Operator.AccountName
@@ -93,16 +92,16 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 		return nil, fmt.Errorf("failed to get operator address: %w", err)
 	}
 
-	botClientCfg := config.ClientConfig{
-		HomeDir:        cfg.Bots.KeyringDir,
-		KeyringBackend: cfg.Bots.KeyringBackend,
+	fulfillerClientCfg := config.ClientConfig{
+		HomeDir:        cfg.Fulfillers.KeyringDir,
+		KeyringBackend: cfg.Fulfillers.KeyringBackend,
 		NodeAddress:    cfg.NodeAddress,
 		GasFees:        cfg.Gas.Fees,
 		GasPrices:      cfg.Gas.Prices,
 		FeeGranter:     operatorAddress.String(),
 	}
 
-	accs, err := addBotAccounts(cfg.Bots.NumberOfBots, botClientCfg, logger)
+	accs, err := addFulfillerAccounts(cfg.Fulfillers.Scale, fulfillerClientCfg, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -111,12 +110,12 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 	granteeAddrs := make([]sdk.AccAddress, 0, len(accs))
 	primeAddrs := make([]string, 0, len(accs))
 
-	var botIdx int
-	for botIdx = range cfg.Bots.NumberOfBots {
-		acc := accs[botIdx]
+	var fulfillerIdx int
+	for fulfillerIdx = range cfg.Fulfillers.Scale {
+		acc := accs[fulfillerIdx]
 		exist, err := accountExists(operatorClient.Context(), acc.Address)
 		if err != nil {
-			return nil, fmt.Errorf("failed to check if bot account exists: %w", err)
+			return nil, fmt.Errorf("failed to check if fulfiller account exists: %w", err)
 		}
 		if !exist {
 			primeAddrs = append(primeAddrs, acc.Address)
@@ -129,44 +128,49 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 		if !hasGrant {
 			_, granteeAddr, err := bech32.DecodeAndConvert(acc.Address)
 			if err != nil {
-				return nil, fmt.Errorf("failed to decode bot address: %w", err)
+				return nil, fmt.Errorf("failed to decode fulfiller address: %w", err)
 			}
 			granteeAddrs = append(granteeAddrs, granteeAddr)
 		}
 
-		b, err := buildBot(
+		cClient, err := cosmosclient.New(config.GetCosmosClientOptions(fulfillerClientCfg)...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create cosmos client for fulfiller: %s;err: %w", acc.Name, err)
+		}
+
+		f, err := newOrderFulfiller(
 			acc,
 			operatorAddress.String(),
 			logger,
-			cfg.Bots,
-			botClientCfg,
+			cfg.Fulfillers.PolicyAddress,
+			cClient,
 			orderCh,
 			fulfilledOrdersCh,
 			ordTracker.releaseAllReservedOrdersFunds,
 			ordTracker.debitAllReservedOrdersFunds,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create bot: %w", err)
+			return nil, fmt.Errorf("failed to create fulfiller: %w", err)
 		}
-		bots[b.account.Name] = b
+		fulfillers[f.account.Name] = f
 		activeAccs = append(activeAccs, acc)
 	}
 
 	if len(primeAddrs) > 0 {
-		logger.Info("priming bot accounts", zap.Strings("addresses", primeAddrs))
+		logger.Info("priming fulfiller accounts", zap.Strings("addresses", primeAddrs))
 		if err = primeAccounts(operatorClient, operatorName, operatorAddress, primeAddrs...); err != nil {
-			return nil, fmt.Errorf("failed to prime bot account: %w", err)
+			return nil, fmt.Errorf("failed to prime fulfiller account: %w", err)
 		}
 	}
 
 	if len(granteeAddrs) > 0 {
-		logger.Info("adding fee grant to bot accounts", zap.Strings("addresses", primeAddrs))
-		if err = addFeeGrantToBot(operatorClient, operatorName, operatorAddress, granteeAddrs...); err != nil {
-			return nil, fmt.Errorf("failed to add grant to bot: %w", err)
+		logger.Info("adding fee grant to fulfiller accounts", zap.Strings("addresses", primeAddrs))
+		if err = addFeeGrantToFulfiller(operatorClient, operatorName, operatorAddress, granteeAddrs...); err != nil {
+			return nil, fmt.Errorf("failed to add grant to fulfiller: %w", err)
 		}
 	}
 
-	err = addBotsToGroup(operatorName, operatorAddress.String(), cfg.Operator.GroupID, operatorClient, activeAccs)
+	err = addFulfillersToGroup(operatorName, operatorAddress.String(), cfg.Operator.GroupID, operatorClient, activeAccs)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +178,7 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 	oc := &orderClient{
 		orderEventer: eventer,
 		orderTracker: ordTracker,
-		bots:         bots,
+		fulfillers:   fulfillers,
 		config:       cfg,
 		logger:       logger,
 	}
@@ -194,11 +198,11 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 func getHubClient(cfg config.Config) (cosmosclient.Client, error) {
 	// init cosmos client for order fetcher
 	hubClientCfg := config.ClientConfig{
-		HomeDir:        cfg.Bots.KeyringDir,
+		HomeDir:        cfg.Fulfillers.KeyringDir,
 		NodeAddress:    cfg.NodeAddress,
 		GasFees:        cfg.Gas.Fees,
 		GasPrices:      cfg.Gas.Prices,
-		KeyringBackend: cfg.Bots.KeyringBackend,
+		KeyringBackend: cfg.Fulfillers.KeyringBackend,
 	}
 
 	hubClient, err := cosmosclient.New(config.GetCosmosClientOptions(hubClientCfg)...)
@@ -244,13 +248,13 @@ func (oc *orderClient) Start(ctx context.Context) error {
 		}
 	}
 
-	oc.logger.Info("starting bots...")
+	oc.logger.Info("starting fulfillers...")
 
-	// start bots
-	for _, b := range oc.bots {
+	// start fulfillers
+	for _, b := range oc.fulfillers {
 		go func() {
 			if err := b.start(ctx); err != nil {
-				oc.logger.Error("failed to bot", zap.Error(err))
+				oc.logger.Error("failed to start fulfiller", zap.Error(err))
 			}
 		}()
 	}

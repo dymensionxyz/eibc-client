@@ -11,12 +11,10 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/x/authz"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
-	"github.com/cosmos/gogoproto/proto"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
 	"github.com/dymensionxyz/eibc-client/config"
-	"github.com/dymensionxyz/eibc-client/types"
 )
 
 type orderTracker struct {
@@ -24,7 +22,6 @@ type orderTracker struct {
 	getLPGrants    getLPGrantsFn
 	fullNodeClient *nodeClient
 	logger         *zap.Logger
-	bots           map[string]*orderFulfiller
 	policyAddress  string
 
 	fomu                sync.Mutex
@@ -39,6 +36,7 @@ type orderTracker struct {
 
 	batchSize              int
 	validation             *config.ValidationConfig
+	toCheckOrdersCh        chan []*demandOrder
 	fulfilledOrdersCh      chan *orderBatch
 	subscriberID           string
 	balanceRefreshInterval time.Duration
@@ -55,7 +53,6 @@ func newOrderTracker(
 	minOperatorFeeShare sdk.Dec,
 	fullNodeClient *nodeClient,
 	fulfilledOrdersCh chan *orderBatch,
-	bots map[string]*orderFulfiller,
 	subscriberID string,
 	batchSize int,
 	validation *config.ValidationConfig,
@@ -73,7 +70,6 @@ func newOrderTracker(
 		fullNodeClient:         fullNodeClient,
 		pool:                   orderPool{orders: make(map[string]*demandOrder)},
 		fulfilledOrdersCh:      fulfilledOrdersCh,
-		bots:                   bots,
 		lps:                    make(map[string]*lp),
 		batchSize:              batchSize,
 		validation:             validation,
@@ -82,35 +78,27 @@ func newOrderTracker(
 		logger:                 logger.With(zap.String("module", "order-resolver")),
 		subscriberID:           subscriberID,
 		balanceRefreshInterval: balanceRefreshInterval,
+		toCheckOrdersCh:        make(chan []*demandOrder, batchSize),
 		fulfilledOrders:        make(map[string]*demandOrder),
 	}
 }
 
 func (or *orderTracker) start(ctx context.Context) error {
-	if err := or.refreshLPs(ctx); err != nil {
-		return fmt.Errorf("failed to load LPs: %w", err)
-	}
-
-	or.selectOrdersWorker(ctx)
-
-	go or.fulfilledOrdersWorker(ctx)
-
-	return nil
-}
-
-func (or *orderTracker) refreshLPs(ctx context.Context) error {
 	if err := or.loadLPs(ctx); err != nil {
 		return fmt.Errorf("failed to load LPs: %w", err)
 	}
 
 	go or.lpLoader(ctx)
 	go or.balanceRefresher(ctx)
+	go or.pullOrders(ctx)
+	go or.enqueueValidOrders(ctx)
+	go or.fulfilledOrdersWorker(ctx)
 
 	return nil
 }
 
 func (or *orderTracker) lpLoader(ctx context.Context) {
-	t := time.NewTicker(5 * time.Minute)
+	t := time.NewTicker(30 * time.Second)
 	for {
 		select {
 		case <-ctx.Done():
@@ -123,112 +111,38 @@ func (or *orderTracker) lpLoader(ctx context.Context) {
 	}
 }
 
-func (or *orderTracker) loadLPs(ctx context.Context) error {
-	grants, err := or.getLPGrants(ctx, &authz.QueryGranteeGrantsRequest{
-		Grantee: or.policyAddress,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to get LP grants: %w", err)
-	}
-
-	or.lpmu.Lock()
-	defer or.lpmu.Unlock()
-
-	for _, grant := range grants.Grants {
-		if grant.Authorization == nil {
-			continue
-		}
-
-		g := new(types.FulfillOrderAuthorization)
-		if err = proto.Unmarshal(grant.Authorization.Value, g); err != nil {
-			return fmt.Errorf("failed to unmarshal grant: %w", err)
-		}
-
-		resp, err := or.getBalances(ctx, &banktypes.QuerySpendableBalancesRequest{
-			Address: grant.Granter,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to get LP balances: %w", err)
-		}
-
-		lp := &lp{
-			address:  grant.Granter,
-			rollapps: make(map[string]rollappCriteria),
-			balance:  resp.Balances,
-		}
-
-		for _, rollapp := range g.Rollapps {
-			// check the operator fee is the minimum for what the operator wants
-			if rollapp.OperatorFeeShare.Dec.LT(or.minOperatorFeeShare) {
-				continue
-			}
-
-			denoms := make(map[string]bool)
-			for _, denom := range rollapp.Denoms {
-				denoms[denom] = true
-			}
-			lp.rollapps[rollapp.RollappId] = rollappCriteria{
-				rollappID:           rollapp.RollappId,
-				denoms:              denoms,
-				maxPrice:            rollapp.MaxPrice,
-				minFeePercentage:    rollapp.MinLpFeePercentage.Dec,
-				operatorFeeShare:    rollapp.OperatorFeeShare.Dec,
-				settlementValidated: rollapp.SettlementValidated,
-			}
-		}
-
-		if len(lp.rollapps) == 0 {
-			continue
-		}
-
-		or.lps[grant.Granter] = lp
-	}
-
-	return nil
-}
-
-// Demand orders are first added:
-// - in sequencer mode, the first batch is sent to the output channel, and the rest of the orders are added to the pool
-// - in p2p and settlement mode, all orders are added to the pool
-// Then, the orders are periodically popped (fetched and deleted) from the pool and checked for validity.
-// If the order is valid, it is sent to the output channel.
-// If the order is not valid, it is added back to the pool.
-// After the order validity deadline is expired, the order is removed permanently.
-// Once an order is fulfilled, it is removed from the store
-func (or *orderTracker) selectOrdersWorker(ctx context.Context) {
-	toCheckOrdersCh := make(chan []*demandOrder, or.batchSize)
-	go or.pullOrders(ctx, toCheckOrdersCh)
-	go or.enqueueValidOrders(ctx, toCheckOrdersCh)
-}
-
-func (or *orderTracker) pullOrders(ctx context.Context, toCheckOrdersCh chan []*demandOrder) {
-	ticker := time.NewTicker(500 * time.Millisecond)
+func (or *orderTracker) pullOrders(ctx context.Context) {
+	ticker := time.NewTicker(2 * time.Second)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			orders := or.pool.popOrders(or.batchSize)
-			if len(orders) == 0 {
-				continue
-			}
-			// in "sequencer" mode send the orders directly to be fulfilled,
-			// in other modes, send the orders to be checked for validity
-			if or.validation.FallbackLevel == config.ValidationModeSequencer {
-				or.outputOrdersCh <- orders
-			} else {
-				toCheckOrdersCh <- orders
-			}
+			or.checkOrders()
 		}
 	}
 }
 
-func (or *orderTracker) enqueueValidOrders(ctx context.Context, toCheckOrdersCh <-chan []*demandOrder) {
+func (or *orderTracker) checkOrders() {
+	orders := or.pool.popOrders(or.batchSize)
+	if len(orders) == 0 {
+		return
+	}
+	// in "sequencer" mode send the orders directly to be fulfilled,
+	// in other modes, send the orders to be checked for validity
+	if or.validation.FallbackLevel == config.ValidationModeSequencer {
+		or.outputOrdersCh <- orders
+	} else {
+		or.toCheckOrdersCh <- orders
+	}
+}
+
+func (or *orderTracker) enqueueValidOrders(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case orders := <-toCheckOrdersCh:
+		case orders := <-or.toCheckOrdersCh:
 			validOrders, retryOrders := or.getValidAndRetryOrders(ctx, orders)
 			if len(validOrders) > 0 {
 				or.outputOrdersCh <- validOrders
@@ -260,7 +174,7 @@ func (or *orderTracker) getValidAndRetryOrders(ctx context.Context, orders []*de
 			or.logger.Debug("order has expired", zap.String("id", order.id))
 			continue
 		}
-		or.logger.Debug("order is not valid yet", zap.String("id", order.id))
+		or.logger.Debug("order is not valid yet", zap.String("id", order.id), zap.String("from", order.from))
 		// order is not valid yet, so add it back to the pool
 		invalidOrders = append(invalidOrders, order)
 	}
@@ -268,6 +182,7 @@ func (or *orderTracker) getValidAndRetryOrders(ctx context.Context, orders []*de
 }
 
 func (or *orderTracker) isOrderExpired(order *demandOrder) bool {
+	fmt.Printf("order.id: %s; order.validDeadline: %v\n", order.id, order.validDeadline)
 	return time.Now().After(order.validDeadline)
 }
 
@@ -292,6 +207,7 @@ func (or *orderTracker) addOrder(orders ...*demandOrder) {
 		orders = batchToPool
 	}
 	or.pool.addOrder(orders...)
+	go or.checkOrders()
 }
 
 func (or *orderTracker) fulfilledOrdersWorker(ctx context.Context) {
@@ -312,7 +228,7 @@ func (or *orderTracker) fulfilledOrdersWorker(ctx context.Context) {
 func (or *orderTracker) addFulfilledOrders(batch *orderBatch) error {
 	or.fomu.Lock()
 	for _, order := range batch.orders {
-		if len(order.amount) == 0 {
+		if len(order.price) == 0 {
 			continue
 		}
 		// add to cache
@@ -345,7 +261,8 @@ func (or *orderTracker) findLPForOrder(order *demandOrder) error {
 
 	lps := or.filterLPsForOrder(order)
 	if len(lps) == 0 {
-		return fmt.Errorf("no LPs found for order")
+		or.logger.Debug("no LPs found for order", zap.String("id", order.id))
+		return nil
 	}
 
 	// randomize the list of LPs to avoid always selecting the same one
@@ -363,7 +280,7 @@ func (or *orderTracker) findLPForOrder(order *demandOrder) error {
 	order.operatorFeePart = bestLP.rollapps[order.rollappId].operatorFeeShare
 
 	// optimistically deduct from the LP's balance
-	bestLP.reserveFunds(order.amount)
+	bestLP.reserveFunds(order.price)
 
 	return nil
 }
@@ -377,7 +294,7 @@ func shuffleLPs(lps []*lp) {
 func (or *orderTracker) filterLPsForOrder(order *demandOrder) []*lp {
 	lps := make([]*lp, 0, len(or.lps))
 	for _, lp := range or.lps {
-		amount := order.amount
+		amount := order.price
 		if !lp.hasBalance(amount) {
 			continue
 		}
@@ -394,13 +311,13 @@ func (or *orderTracker) filterLPsForOrder(order *demandOrder) []*lp {
 		}
 
 		// check the order price does not exceed the max price
-		if rollapp.maxPrice.IsAllPositive() && order.amount.IsAnyGT(rollapp.maxPrice) {
+		if rollapp.maxPrice.IsAllPositive() && order.price.IsAnyGT(rollapp.maxPrice) {
 			continue
 		}
 
 		// check the fee is at least the minimum for what the lp wants
 		operatorFee := sdk.NewDecFromInt(order.fee.Amount).Mul(rollapp.operatorFeeShare).RoundInt()
-		amountDec := sdk.NewDecFromInt(order.amount[0].Amount.Add(order.fee.Amount))
+		amountDec := sdk.NewDecFromInt(order.price[0].Amount.Add(order.fee.Amount))
 		minLPFee := amountDec.Mul(rollapp.minFeePercentage).RoundInt()
 		lpFee := order.fee.Amount.Sub(operatorFee)
 

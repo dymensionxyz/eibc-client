@@ -42,10 +42,10 @@ var initCmd = &cobra.Command{
 			log.Fatalf("failed to unmarshal config: %v", err)
 		}
 
-		// if bot key dir doesn't exist, create it
-		if _, err := os.Stat(cfg.Bots.KeyringDir); os.IsNotExist(err) {
-			if err := os.MkdirAll(cfg.Bots.KeyringDir, 0o755); err != nil {
-				log.Fatalf("failed to create bot key directory: %v", err)
+		// if fulfiller key dir doesn't exist, create it
+		if _, err := os.Stat(cfg.Fulfillers.KeyringDir); os.IsNotExist(err) {
+			if err := os.MkdirAll(cfg.Fulfillers.KeyringDir, 0o755); err != nil {
+				log.Fatalf("failed to create fulfiller key directory: %v", err)
 			}
 		}
 
@@ -94,8 +94,8 @@ var startCmd = &cobra.Command{
 			log.Fatalf("failed to create order client: %v", err)
 		}
 
-		if cfg.Bots.NumberOfBots == 0 {
-			log.Println("no bots to start")
+		if cfg.Fulfillers.Scale == 0 {
+			log.Println("no fulfillers to start")
 			return
 		}
 
@@ -125,11 +125,11 @@ func buildLogger(logLevel string) (*zap.Logger, error) {
 
 var scaleCmd = &cobra.Command{
 	Use:   "scale [count]",
-	Short: "scale bot count",
-	Long:  `scale the number of bot accounts that fulfill the eibc orders`,
+	Short: "scale fulfiller count",
+	Long:  `scale the number of accounts that fulfill demand orders`,
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		newBotCount, err := strconv.Atoi(args[0])
+		newFulfillerCount, err := strconv.Atoi(args[0])
 		if err != nil {
 			return
 		}
@@ -148,21 +148,21 @@ var scaleCmd = &cobra.Command{
 			return
 		}
 
-		err = utils.UpdateViperConfig("bots.number_of_bots", newBotCount, viper.ConfigFileUsed())
+		err = utils.UpdateViperConfig("fulfillers.scale", newFulfillerCount, viper.ConfigFileUsed())
 		if err != nil {
 			return
 		}
 
 		fmt.Printf(
-			"bot count successfully scaled to %d, please restart the eibc process if it's running\n",
-			newBotCount,
+			"fulfiller count successfully scaled to %d, please restart the eibc process if it's running\n",
+			newFulfillerCount,
 		)
 	},
 }
 
 var versionCmd = &cobra.Command{
 	Use:   "version",
-	Short: "Print the version of roller",
+	Short: "Print the version of eibc-client",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println(version.BuildVersion)
 	},
@@ -173,7 +173,6 @@ func init() {
 	RootCmd.AddCommand(initCmd)
 	RootCmd.AddCommand(startCmd)
 	RootCmd.AddCommand(scaleCmd)
-
 	RootCmd.AddCommand(versionCmd)
 
 	cobra.OnInitialize(config.InitConfig)

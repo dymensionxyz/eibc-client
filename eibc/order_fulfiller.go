@@ -14,7 +14,6 @@ import (
 
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 
-	"github.com/dymensionxyz/eibc-client/config"
 	"github.com/dymensionxyz/eibc-client/types"
 )
 
@@ -38,61 +37,30 @@ type cosmosClient interface {
 }
 
 func newOrderFulfiller(
+	acc account,
+	operatorAddress string,
+	logger *zap.Logger,
+	policyAddress string,
+	cClient cosmosClient,
 	newOrdersCh chan []*demandOrder,
 	fulfilledOrdersCh chan<- *orderBatch,
-	client cosmosClient,
-	acc account,
-	policyAddress string,
-	operatorAddress string,
 	releaseAllReservedOrdersFunds func(demandOrder ...*demandOrder),
 	debitAllReservedOrdersFunds func(demandOrder ...*demandOrder),
-	logger *zap.Logger,
-) *orderFulfiller {
+) (*orderFulfiller, error) {
 	o := &orderFulfiller{
 		account:                       acc,
 		policyAddress:                 policyAddress,
 		operatorAddress:               operatorAddress,
-		client:                        client,
+		client:                        cClient,
 		fulfilledOrdersCh:             fulfilledOrdersCh,
 		newOrdersCh:                   newOrdersCh,
 		releaseAllReservedOrdersFunds: releaseAllReservedOrdersFunds,
 		debitAllReservedOrdersFunds:   debitAllReservedOrdersFunds,
 		logger: logger.With(zap.String("module", "order-fulfiller"),
-			zap.String("bot-name", acc.Name), zap.String("address", acc.Address)),
+			zap.String("name", acc.Name), zap.String("address", acc.Address)),
 	}
 	o.FulfillDemandOrders = o.fulfillAuthorizedDemandOrders
-	return o
-}
-
-// add command that creates all the bots to be used?
-
-func buildBot(
-	acc account,
-	operatorAddress string,
-	logger *zap.Logger,
-	cfg config.BotConfig,
-	clientCfg config.ClientConfig,
-	newOrderCh chan []*demandOrder,
-	fulfilledCh chan *orderBatch,
-	releaseAllReservedOrdersFunds func(demandOrder ...*demandOrder),
-	debitAllReservedOrdersFunds func(demandOrder ...*demandOrder),
-) (*orderFulfiller, error) {
-	cosmosClient, err := cosmosclient.New(config.GetCosmosClientOptions(clientCfg)...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create cosmos client for bot: %s;err: %w", acc.Name, err)
-	}
-
-	return newOrderFulfiller(
-		newOrderCh,
-		fulfilledCh,
-		cosmosClient,
-		acc,
-		cfg.PolicyAddress,
-		operatorAddress,
-		releaseAllReservedOrdersFunds,
-		debitAllReservedOrdersFunds,
-		logger,
-	), nil
+	return o, nil
 }
 
 func (ol *orderFulfiller) start(ctx context.Context) error {
@@ -143,8 +111,7 @@ func (ol *orderFulfiller) processBatch(batch []*demandOrder) error {
 		}
 
 		ol.fulfilledOrdersCh <- &orderBatch{
-			orders:    batch,
-			fulfiller: ol.account.Address, // TODO
+			orders: batch,
 		}
 	}()
 
@@ -166,7 +133,7 @@ func (ol *orderFulfiller) fulfillAuthorizedDemandOrders(demandOrder ...*demandOr
 			order.lpAddress,
 			ol.operatorAddress,
 			order.fee.Amount.String(),
-			order.amount,
+			order.price,
 			order.operatorFeePart,
 			order.settlementValidated,
 		)

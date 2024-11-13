@@ -7,14 +7,13 @@ import (
 )
 
 type orderBatch struct {
-	orders    []*demandOrder
-	fulfiller string
+	orders []*demandOrder
 }
 
 type demandOrder struct {
 	id                  string
 	denom               string
-	amount              sdk.Coins
+	price               sdk.Coins
 	fee                 sdk.Coin
 	rollappId           string
 	status              string
@@ -23,6 +22,7 @@ type demandOrder struct {
 	settlementValidated bool
 	operatorFeePart     sdk.Dec
 	lpAddress           string
+	from                string
 }
 
 type account struct {

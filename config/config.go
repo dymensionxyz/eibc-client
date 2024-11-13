@@ -17,7 +17,7 @@ type Config struct {
 	Rollapps     map[string]RollappConfig `mapstructure:"rollapps"`
 
 	Operator   OperatorConfig   `mapstructure:"operator"`
-	Bots       BotConfig        `mapstructure:"bots"`
+	Fulfillers FulfillerConfig  `mapstructure:"fulfillers"`
 	Validation ValidationConfig `mapstructure:"validation"`
 
 	LogLevel string `mapstructure:"log_level"`
@@ -34,13 +34,13 @@ type GasConfig struct {
 	Fees   string `mapstructure:"fees"`
 }
 
-type BotConfig struct {
-	NumberOfBots    int                          `mapstructure:"number_of_bots"`
+type FulfillerConfig struct {
+	Scale           int                          `mapstructure:"scale"`
 	OperatorAddress string                       `mapstructure:"operator_address"`
 	PolicyAddress   string                       `mapstructure:"policy_address"`
 	KeyringBackend  cosmosaccount.KeyringBackend `mapstructure:"keyring_backend"`
 	KeyringDir      string                       `mapstructure:"keyring_dir"`
-	MaxOrdersPerTx  int                          `mapstructure:"max_orders_per_tx"`
+	BatchSize       int                          `mapstructure:"batch_size"`
 }
 
 type OperatorConfig struct {
@@ -70,11 +70,11 @@ const (
 	defaultGasFees     = "3000000000000000" + defaultHubDenom
 	testKeyringBackend = "test"
 
-	BotNamePrefix                  = "bot-"
+	FulfillerNamePrefix            = "bot-"
 	defaultOperatorAccountName     = "client"
 	defaultOperatorGroupID         = 1
 	defaultOperatorMinFeeShare     = 0.1
-	defaultNumberOfBots            = 30
+	defaultFulfillerScale          = 30
 	NewOrderBufferSize             = 100
 	defaultMaxOrdersPerTx          = 10
 	defaultOrderRefreshInterval    = 30 * time.Second
@@ -118,11 +118,11 @@ func InitConfig() {
 	viper.SetDefault("operator.group_id", defaultOperatorGroupID)
 	viper.SetDefault("operator.min_fee_share", defaultOperatorMinFeeShare)
 
-	viper.SetDefault("bots.keyring_backend", testKeyringBackend)
-	viper.SetDefault("bots.keyring_dir", defaultHomeDir)
-	viper.SetDefault("bots.number_of_bots", defaultNumberOfBots)
-	viper.SetDefault("bots.max_orders_per_tx", defaultMaxOrdersPerTx)
-	viper.SetDefault("bots.policy_address", "<your-policy-address>")
+	viper.SetDefault("fulfillers.keyring_backend", testKeyringBackend)
+	viper.SetDefault("fulfillers.keyring_dir", defaultHomeDir)
+	viper.SetDefault("fulfillers.scale", defaultFulfillerScale)
+	viper.SetDefault("fulfillers.max_orders_per_tx", defaultMaxOrdersPerTx)
+	viper.SetDefault("fulfillers.policy_address", "<your-policy-address>")
 
 	viper.SetDefault("validation.fallback_level", defaultValidationFallbackLevel)
 	viper.SetDefault("validation.validation_wait_time", defaultValidationWaitTime)
