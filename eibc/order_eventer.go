@@ -134,7 +134,7 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 		}
 
 		if err := e.orderTracker.findLPForOrder(order); err != nil {
-			e.logger.Warn("failed to find LP for order", zap.Error(err), zap.String("order_id", order.id))
+			e.logger.Debug("failed to find LP for order", zap.Error(err), zap.String("order_id", order.id))
 			continue
 		}
 

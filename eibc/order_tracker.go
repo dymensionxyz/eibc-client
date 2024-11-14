@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -259,10 +260,9 @@ func (or *orderTracker) findLPForOrder(order *demandOrder) error {
 	or.lpmu.Lock()
 	defer or.lpmu.Unlock()
 
-	lps := or.filterLPsForOrder(order)
+	lps, lpMiss := or.filterLPsForOrder(order)
 	if len(lps) == 0 {
-		or.logger.Debug("no LPs found for order", zap.String("id", order.id))
-		return nil
+		return fmt.Errorf("no LPs found for order: %s", strings.Join(lpMiss, "; "))
 	}
 
 	// randomize the list of LPs to avoid always selecting the same one
@@ -291,43 +291,48 @@ func shuffleLPs(lps []*lp) {
 	})
 }
 
-func (or *orderTracker) filterLPsForOrder(order *demandOrder) []*lp {
+func (or *orderTracker) filterLPsForOrder(order *demandOrder) ([]*lp, []string) {
 	lps := make([]*lp, 0, len(or.lps))
+	lpSkip := make([]string, 0, len(or.lps))
+
 	for _, lp := range or.lps {
 		amount := order.price
 		if !lp.hasBalance(amount) {
+			lpSkip = append(lpSkip, fmt.Sprintf("%s: balance", lp.address))
 			continue
 		}
 
 		// check the rollapp is allowed
 		rollapp, ok := lp.rollapps[order.rollappId]
 		if !ok {
+			lpSkip = append(lpSkip, fmt.Sprintf("%s: rollapp", lp.address))
 			continue
 		}
 
 		// check the denom is allowed
 		if len(rollapp.denoms) > 0 && !rollapp.denoms[order.fee.Denom] {
+			lpSkip = append(lpSkip, fmt.Sprintf("%s: denom", lp.address))
 			continue
 		}
 
 		// check the order price does not exceed the max price
 		if rollapp.maxPrice.IsAllPositive() && order.price.IsAnyGT(rollapp.maxPrice) {
+			lpSkip = append(lpSkip, fmt.Sprintf("%s: max_price", lp.address))
 			continue
 		}
 
 		// check the fee is at least the minimum for what the lp wants
-		operatorFee := sdk.NewDecFromInt(order.fee.Amount).Mul(rollapp.operatorFeeShare).RoundInt()
 		amountDec := sdk.NewDecFromInt(order.price[0].Amount.Add(order.fee.Amount))
-		minLPFee := amountDec.Mul(rollapp.minFeePercentage).RoundInt()
-		lpFee := order.fee.Amount.Sub(operatorFee)
+		minFee := amountDec.Mul(rollapp.minFeePercentage).RoundInt()
 
-		if lpFee.LT(minLPFee) {
+		if order.fee.Amount.LT(minFee) {
+			lpSkip = append(lpSkip, fmt.Sprintf("%s: min_fee", lp.address))
 			continue
 		}
 
 		lps = append(lps, lp)
 	}
-	return lps
+	return lps, lpSkip
 }
 
 func selectBestLP(lps []*lp, rollappID string) *lp {

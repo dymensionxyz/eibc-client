@@ -163,7 +163,7 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 		}
 
 		if err := p.orderTracker.findLPForOrder(newOrder); err != nil {
-			p.logger.Warn("failed to find LP for order", zap.Error(err), zap.String("order_id", newOrder.id))
+			p.logger.Debug("failed to find LP for order", zap.Error(err), zap.String("order_id", newOrder.id))
 			continue
 		}
 
