@@ -3,6 +3,7 @@ project_name: eibc-client
 before:
   hooks:
     - go mod tidy
+
 builds:
   - id: eibc-client
     main: ./main.go
@@ -16,6 +17,7 @@ builds:
     goarch:
       - amd64
       - arm64
+
 changelog:
   use: git
   groups:
@@ -39,11 +41,7 @@ archives:
       - goos: windows
         format: zip
     builds:
-      - eibc-client-darwin
-      - eibc-client-darwin-arm64
-      - eibc-client-windows
-      - eibc-client-linux
-      - eibc-client-linux-arm64
+      - eibc-client
 
 checksum:
   name_template: 'checksums.txt'
