@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -26,8 +25,11 @@ type orderPoller struct {
 
 	getOrders    func() ([]Order, error)
 	orderTracker *orderTracker
-	sync.Mutex
+
+	skippedOrders map[string]struct{}
 }
+
+const maxSkippedOrders = 1000
 
 func newOrderPoller(
 	chainID string,
@@ -42,13 +44,14 @@ func newOrderPoller(
 		logger:        logger.With(zap.String("module", "order-poller")),
 		orderTracker:  orderTracker,
 		indexerClient: &http.Client{Timeout: 25 * time.Second},
+		skippedOrders: make(map[string]struct{}),
 	}
 	o.getOrders = o.getDemandOrdersFromIndexer
 	return o
 }
 
 const (
-	ordersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: {equalTo: EibcPending}}) {nodes { eibcOrderId amount proofHeight rollappId eibcFee }}}"}`
+	ordersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: {equalTo: EibcPending}}) {nodes { eibcOrderId amount proofHeight price rollappId eibcFee }}}"}`
 )
 
 type Order struct {
@@ -89,9 +92,17 @@ func (p *orderPoller) start(ctx context.Context) error {
 }
 
 func (p *orderPoller) pollPendingDemandOrders() error {
-	demandOrders, err := p.getOrders()
+	newDemandOrders, err := p.getOrders()
 	if err != nil {
 		return fmt.Errorf("failed to get demand orders: %w", err)
+	}
+
+	demandOrders := make([]Order, 0, len(newDemandOrders))
+	for _, order := range newDemandOrders {
+		if _, ok := p.skippedOrders[order.EibcOrderId]; ok {
+			continue
+		}
+		demandOrders = append(demandOrders, order)
 	}
 
 	newOrders := p.convertOrders(demandOrders)
@@ -119,7 +130,14 @@ func (p *orderPoller) pollPendingDemandOrders() error {
 func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder) {
 	for _, order := range demandOrders {
 		if order.Fee == "" {
-			p.logger.Warn("order fee is empty", zap.String("order", order.EibcOrderId))
+			continue
+		}
+
+		if order.Price == "" {
+			continue
+		}
+
+		if order.ProofHeight == "" {
 			continue
 		}
 
@@ -129,19 +147,18 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 			continue
 		}
 
-		price, err := sdk.ParseCoinsNormalized(order.Price)
-		if err != nil {
-			p.logger.Error("failed to parse amount", zap.Error(err))
+		priceInt, ok := sdk.NewIntFromString(order.Price)
+		if !ok {
+			p.logger.Error("failed to parse price", zap.String("price", order.Price))
 			continue
 		}
 
-		var proofHeight int64
-		if order.ProofHeight != "" {
-			proofHeight, err = strconv.ParseInt(order.ProofHeight, 10, 64)
-			if err != nil {
-				p.logger.Error("failed to parse proof height", zap.Error(err))
-				continue
-			}
+		price := sdk.NewCoins(sdk.NewCoin(fee.Denom, priceInt))
+
+		proofHeight, err := strconv.ParseInt(order.ProofHeight, 10, 64)
+		if err != nil {
+			p.logger.Error("failed to parse proof height", zap.Error(err))
+			continue
 		}
 
 		validationWaitTime := p.orderTracker.validation.ValidationWaitTime
@@ -164,6 +181,9 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 
 		if err := p.orderTracker.findLPForOrder(newOrder); err != nil {
 			p.logger.Debug("failed to find LP for order", zap.Error(err), zap.String("order_id", newOrder.id))
+			if len(p.skippedOrders) < maxSkippedOrders {
+				p.skippedOrders[newOrder.id] = struct{}{}
+			}
 			continue
 		}
 
