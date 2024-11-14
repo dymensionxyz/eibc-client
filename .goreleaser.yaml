@@ -32,3 +32,21 @@ changelog:
       - '^chore:'
       - '^test:'
       - '^ci:'
+
+archives:
+  - name_template: '{{ .ProjectName }}_{{- title .Os }}_{{ .Arch }}'
+    format_overrides:
+      - goos: windows
+        format: zip
+    builds:
+      - eibc-client-darwin
+      - eibc-client-darwin-arm64
+      - eibc-client-windows
+      - eibc-client-linux
+      - eibc-client-linux-arm64
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  name_template: "{{ .Tag }}-next"
