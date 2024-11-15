@@ -136,7 +136,7 @@ func (or *orderTracker) loadLPs(ctx context.Context) error {
 				rollappID:           rollapp.RollappId,
 				denoms:              denoms,
 				maxPrice:            rollapp.MaxPrice,
-				minFeePercentage:    rollapp.MinLpFeePercentage.Dec,
+				minFeePercentage:    rollapp.MinFeePercentage.Dec,
 				operatorFeeShare:    rollapp.OperatorFeeShare.Dec,
 				settlementValidated: rollapp.SettlementValidated,
 			}
