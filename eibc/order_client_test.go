@@ -148,22 +148,25 @@ func TestOrderClient(t *testing.T) {
 			pollOrders: []Order{
 				{
 					EibcOrderId: "order1",
-					Price:       "80stake",
+					Price:       "80",
 					Fee:         "12stake",
 					RollappId:   "rollapp1",
 					ProofHeight: "1",
+					BlockHeight: "1",
 				}, {
 					EibcOrderId: "order2",
-					Price:       "202stake",
+					Price:       "202",
 					Fee:         "25stake",
 					RollappId:   "rollapp2",
 					ProofHeight: "2",
+					BlockHeight: "2",
 				}, {
 					EibcOrderId: "order5",
-					Price:       "201stake",
+					Price:       "201",
 					Fee:         "50stake",
 					RollappId:   "rollapp1",
 					ProofHeight: "5",
+					BlockHeight: "5",
 				},
 			},
 			eventOrders: []Order{
