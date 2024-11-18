@@ -38,7 +38,6 @@ type orderTracker struct {
 	batchSize              int
 	validation             *config.ValidationConfig
 	toCheckOrdersCh        chan []*demandOrder
-	fulfilledOrdersCh      chan *orderBatch
 	subscriberID           string
 	balanceRefreshInterval time.Duration
 }
@@ -53,7 +52,6 @@ func newOrderTracker(
 	policyAddress string,
 	minOperatorFeeShare sdk.Dec,
 	fullNodeClient *nodeClient,
-	fulfilledOrdersCh chan *orderBatch,
 	subscriberID string,
 	batchSize int,
 	validation *config.ValidationConfig,
@@ -70,7 +68,6 @@ func newOrderTracker(
 		minOperatorFeeShare:    minOperatorFeeShare,
 		fullNodeClient:         fullNodeClient,
 		pool:                   orderPool{orders: make(map[string]*demandOrder)},
-		fulfilledOrdersCh:      fulfilledOrdersCh,
 		lps:                    make(map[string]*lp),
 		batchSize:              batchSize,
 		validation:             validation,
@@ -80,7 +77,6 @@ func newOrderTracker(
 		subscriberID:           subscriberID,
 		balanceRefreshInterval: balanceRefreshInterval,
 		toCheckOrdersCh:        make(chan []*demandOrder, batchSize),
-		fulfilledOrders:        make(map[string]*demandOrder),
 	}
 }
 
@@ -93,7 +89,6 @@ func (or *orderTracker) start(ctx context.Context) error {
 	go or.balanceRefresher(ctx)
 	go or.pullOrders(ctx)
 	go or.enqueueValidOrders(ctx)
-	go or.fulfilledOrdersWorker(ctx)
 
 	return nil
 }
@@ -187,7 +182,7 @@ func (or *orderTracker) isOrderExpired(order *demandOrder) bool {
 	return time.Now().After(order.validDeadline)
 }
 
-func (or *orderTracker) addOrder(orders ...*demandOrder) {
+func (or *orderTracker) trackOrders(orders ...*demandOrder) {
 	// - in mode "sequencer" we send a batch directly to be fulfilled,
 	// and any orders that overflow the batch are added to the pool
 	// - in mode "p2p" and "settlement" all orders are added to the pool
@@ -207,49 +202,12 @@ func (or *orderTracker) addOrder(orders ...*demandOrder) {
 		or.outputOrdersCh <- batchToSend
 		orders = batchToPool
 	}
-	or.pool.addOrder(orders...)
+	or.pool.upsertOrder(orders...)
 	go or.checkOrders()
-}
-
-func (or *orderTracker) fulfilledOrdersWorker(ctx context.Context) {
-	for {
-		select {
-		case batch := <-or.fulfilledOrdersCh:
-			if err := or.addFulfilledOrders(batch); err != nil {
-				or.logger.Error("failed to add fulfilled orders", zap.Error(err))
-			}
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-// addFulfilledOrders adds the fulfilled orders to the fulfilledOrders cache, and removes them from the orderPool.
-// It also persists the state to the database.
-func (or *orderTracker) addFulfilledOrders(batch *orderBatch) error {
-	or.fomu.Lock()
-	for _, order := range batch.orders {
-		if len(order.price) == 0 {
-			continue
-		}
-		// add to cache
-		or.fulfilledOrders[order.id] = order
-		or.pool.removeOrder(order.id) // just in case it's still in the pool
-	}
-	or.fomu.Unlock()
-	return nil
 }
 
 func (or *orderTracker) canFulfillOrder(order *demandOrder) bool {
 	if !or.isRollappSupported(order.rollappId) {
-		return false
-	}
-
-	if or.isOrderFulfilled(order.id) {
-		return false
-	}
-	// we are already processing this order
-	if or.isOrderInPool(order.id) {
 		return false
 	}
 
@@ -363,8 +321,4 @@ func (or *orderTracker) isOrderFulfilled(id string) bool {
 
 	_, ok := or.fulfilledOrders[id]
 	return ok
-}
-
-func (or *orderTracker) isOrderInPool(id string) bool {
-	return or.pool.hasOrder(id)
 }

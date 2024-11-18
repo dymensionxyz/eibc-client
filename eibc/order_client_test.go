@@ -40,6 +40,7 @@ func TestOrderClient(t *testing.T) {
 		fullNodeClient            *nodeClient
 		pollOrders                []Order
 		eventOrders               []Order
+		updateOrders              []Order
 		expectLPFulfilledOrderIDs map[string]string // orderID -> lpAddress
 	}{
 		{
@@ -156,7 +157,7 @@ func TestOrderClient(t *testing.T) {
 				}, {
 					EibcOrderId: "order2",
 					Price:       "202",
-					Fee:         "25stake",
+					Fee:         "2stake", // too low - won't fulfill
 					RollappId:   "rollapp2",
 					ProofHeight: "2",
 					BlockHeight: "2",
@@ -188,6 +189,16 @@ func TestOrderClient(t *testing.T) {
 					Fee:         "35adym",
 					RollappId:   "rollapp2",
 					ProofHeight: "6",
+				},
+			},
+			updateOrders: []Order{
+				{
+					EibcOrderId: "order2",
+					Price:       "202",
+					Fee:         "25stake", // update so it will fulfill
+					RollappId:   "rollapp2",
+					ProofHeight: "2",
+					BlockHeight: "2",
 				},
 			},
 			expectLPFulfilledOrderIDs: map[string]string{
@@ -261,6 +272,19 @@ func TestOrderClient(t *testing.T) {
 				}
 			}
 
+			for _, order := range tt.updateOrders {
+				oc.orderEventer.eventClient.(*mockNodeClient).updateOrderCh <- coretypes.ResultEvent{
+					Events: map[string][]string{
+						updatedEvent + ".order_id":      {order.EibcOrderId},
+						updatedEvent + ".price":         {order.Price},
+						updatedEvent + ".packet_status": {"PENDING"},
+						updatedEvent + ".new_fee":       {order.Fee},
+						updatedEvent + ".rollapp_id":    {order.RollappId},
+						updatedEvent + ".proof_height":  {order.ProofHeight},
+					},
+				}
+			}
+
 			// wait a bit for the client to fulfill orders
 			time.Sleep(3 * time.Second)
 
@@ -298,7 +322,6 @@ func setupTestOrderClient(
 ) (*orderClient, error) {
 	logger, _ := zap.NewDevelopment()
 	orderCh := make(chan []*demandOrder, config.NewOrderBufferSize)
-	fulfilledOrdersCh := make(chan *orderBatch, config.NewOrderBufferSize)
 
 	// tracker
 	trackerClient := hubClient
@@ -311,7 +334,6 @@ func setupTestOrderClient(
 		"policyAddress",
 		minOperatorFeeShare,
 		fullNodeClient,
-		fulfilledOrdersCh,
 		"subscriber",
 		cfg.Fulfillers.BatchSize,
 		&cfg.Validation,
@@ -327,7 +349,7 @@ func setupTestOrderClient(
 	eventerClient := hubClient
 	eventerClient.finalizeOrderCh = make(chan coretypes.ResultEvent, 1)
 	eventerClient.addOrderCh = make(chan coretypes.ResultEvent, 1)
-	eventerClient.stateInfoCh = make(chan coretypes.ResultEvent, 1)
+	eventerClient.updateOrderCh = make(chan coretypes.ResultEvent, 1)
 
 	eventer := newOrderEventer(
 		cosmosclient.Client{
@@ -356,7 +378,6 @@ func setupTestOrderClient(
 			"policyAddress",
 			&hc,
 			orderCh,
-			fulfilledOrdersCh,
 			ordTracker.releaseAllReservedOrdersFunds,
 			ordTracker.debitAllReservedOrdersFunds,
 		)
@@ -432,7 +453,7 @@ type mockNodeClient struct {
 	rpcclient.Client
 	finalizeOrderCh chan coretypes.ResultEvent
 	addOrderCh      chan coretypes.ResultEvent
-	stateInfoCh     chan coretypes.ResultEvent
+	updateOrderCh   chan coretypes.ResultEvent
 }
 
 func (m *mockNodeClient) Start() error {
@@ -449,8 +470,10 @@ func (m *mockNodeClient) BroadcastTx(string, ...sdk.Msg) (cosmosclient.Response,
 
 func (m *mockNodeClient) Subscribe(_ context.Context, _ string, query string, _ ...int) (out <-chan coretypes.ResultEvent, err error) {
 	switch query {
-	case fmt.Sprintf("%s.is_fulfilled='false'", createdEvent):
+	case createdEvent:
 		return m.addOrderCh, nil
+	case updatedEvent:
+		return m.updateOrderCh, nil
 	}
 	return nil, fmt.Errorf("invalid query")
 }

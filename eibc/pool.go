@@ -14,9 +14,19 @@ func (op *orderPool) addOrder(order ...*demandOrder) {
 
 	for _, o := range order {
 		// skip if the order is already in the pool
+		// this can happen if the order is updated
 		if op.orders[o.id] != nil {
 			continue
 		}
+		op.orders[o.id] = o
+	}
+}
+
+func (op *orderPool) upsertOrder(order ...*demandOrder) {
+	op.opmu.Lock()
+	defer op.opmu.Unlock()
+
+	for _, o := range order {
 		op.orders[o.id] = o
 	}
 }

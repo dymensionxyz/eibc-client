@@ -1,6 +1,6 @@
 module github.com/dymensionxyz/eibc-client
 
-go 1.22.2
+go 1.23.1
 
 require (
 	cosmossdk.io/errors v1.0.1

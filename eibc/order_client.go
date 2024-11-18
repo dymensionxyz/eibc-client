@@ -30,9 +30,7 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 
 	//nolint:gosec
 	subscriberID := fmt.Sprintf("eibc-client-%d", rand.Int())
-
 	orderCh := make(chan []*demandOrder, config.NewOrderBufferSize)
-	fulfilledOrdersCh := make(chan *orderBatch, config.NewOrderBufferSize) // TODO: make buffer size configurable
 
 	hubClient, err := getHubClient(cfg)
 	if err != nil {
@@ -57,7 +55,6 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 		cfg.Fulfillers.PolicyAddress,
 		minOperatorFeeShare,
 		fullNodeClient,
-		fulfilledOrdersCh,
 		subscriberID,
 		cfg.Fulfillers.BatchSize,
 		&cfg.Validation,
@@ -145,7 +142,6 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 			cfg.Fulfillers.PolicyAddress,
 			cClient,
 			orderCh,
-			fulfilledOrdersCh,
 			ordTracker.releaseAllReservedOrdersFunds,
 			ordTracker.debitAllReservedOrdersFunds,
 		)

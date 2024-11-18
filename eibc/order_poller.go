@@ -28,8 +28,6 @@ type orderPoller struct {
 	lastBlockHeight uint64
 }
 
-const maxSkippedOrders = 1000
-
 func newOrderPoller(
 	chainID string,
 	orderTracker *orderTracker,
@@ -125,7 +123,7 @@ func (p *orderPoller) pollPendingDemandOrders() error {
 		p.logger.Info("new demand orders", zap.Int("count", len(newOrders)))
 	}
 
-	p.orderTracker.addOrder(newOrders...)
+	p.orderTracker.trackOrders(newOrders...)
 
 	return nil
 }
