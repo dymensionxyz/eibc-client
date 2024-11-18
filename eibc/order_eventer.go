@@ -155,12 +155,12 @@ func (e *orderEventer) parseOrdersFromEvents(eventName string, res tmtypes.Resul
 }
 
 func (e *orderEventer) subscribeToPendingDemandOrders(ctx context.Context) error {
-	query := createdEvent
+	query := fmt.Sprintf("tm.event='Tx' AND action='%s'", createdEvent)
 	return e.subscribeToEvent(ctx, createdEvent, query, e.enqueueEventOrders)
 }
 
 func (e *orderEventer) subscribeToUpdatedDemandOrders(ctx context.Context) error {
-	query := updatedEvent
+	query := fmt.Sprintf("tm.event='Tx' AND action='%s'", updatedEvent)
 	return e.subscribeToEvent(ctx, updatedEvent, query, e.enqueueEventOrders)
 }
 
