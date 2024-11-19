@@ -40,6 +40,7 @@ type orderTracker struct {
 	toCheckOrdersCh        chan []*demandOrder
 	subscriberID           string
 	balanceRefreshInterval time.Duration
+	validateOrdersInterval time.Duration
 }
 
 type (
@@ -56,7 +57,8 @@ func newOrderTracker(
 	batchSize int,
 	validation *config.ValidationConfig,
 	ordersCh chan<- []*demandOrder,
-	balanceRefreshInterval time.Duration,
+	balanceRefreshInterval,
+	validateOrdersInterval time.Duration,
 	logger *zap.Logger,
 ) *orderTracker {
 	azc := authz.NewQueryClient(hubClient.Context())
@@ -76,6 +78,7 @@ func newOrderTracker(
 		logger:                 logger.With(zap.String("module", "order-resolver")),
 		subscriberID:           subscriberID,
 		balanceRefreshInterval: balanceRefreshInterval,
+		validateOrdersInterval: validateOrdersInterval,
 		toCheckOrdersCh:        make(chan []*demandOrder, batchSize),
 	}
 }
@@ -87,7 +90,7 @@ func (or *orderTracker) start(ctx context.Context) error {
 
 	go or.lpLoader(ctx)
 	go or.balanceRefresher(ctx)
-	go or.pullOrders(ctx)
+	go or.orderValidator(ctx)
 	go or.enqueueValidOrders(ctx)
 
 	return nil
@@ -107,8 +110,8 @@ func (or *orderTracker) lpLoader(ctx context.Context) {
 	}
 }
 
-func (or *orderTracker) pullOrders(ctx context.Context) {
-	ticker := time.NewTicker(2 * time.Second)
+func (or *orderTracker) orderValidator(ctx context.Context) {
+	ticker := time.NewTicker(or.validateOrdersInterval)
 	for {
 		select {
 		case <-ctx.Done():
@@ -162,16 +165,25 @@ func (or *orderTracker) getValidAndRetryOrders(ctx context.Context, orders []*de
 			continue
 		}
 		if valid {
+			or.pool.removeOrder(order.id)
 			validOrders = append(validOrders, order)
 			continue
 		}
 		if or.isOrderExpired(order) {
-			or.releaseAllReservedOrdersFunds(order)
+			or.evictOrder(order)
 			or.logger.Debug("order has expired", zap.String("id", order.id))
 			continue
 		}
 		or.logger.Debug("order is not valid yet", zap.String("id", order.id), zap.String("from", order.from))
+
+		if !or.orderFulfillable(order) {
+			or.evictOrder(order)
+			or.logger.Debug("order is not fulfillable anymore", zap.String("id", order.id))
+			continue
+		}
+
 		// order is not valid yet, so add it back to the pool
+		order.checking = false
 		invalidOrders = append(invalidOrders, order)
 	}
 	return
@@ -180,6 +192,20 @@ func (or *orderTracker) getValidAndRetryOrders(ctx context.Context, orders []*de
 func (or *orderTracker) isOrderExpired(order *demandOrder) bool {
 	fmt.Printf("order.id: %s; order.validDeadline: %v\n", order.id, order.validDeadline)
 	return time.Now().After(order.validDeadline)
+}
+
+func (or *orderTracker) orderFulfillable(order *demandOrder) bool {
+	if err := or.findLPForOrder(order); err != nil {
+		or.logger.Debug("failed to find LP for order", zap.Error(err), zap.String("order_id", order.id))
+		return false
+	}
+
+	return true
+}
+
+func (or *orderTracker) evictOrder(order *demandOrder) {
+	or.pool.removeOrder(order.id)
+	or.releaseAllReservedOrdersFunds(order)
 }
 
 func (or *orderTracker) trackOrders(orders ...*demandOrder) {
@@ -221,6 +247,17 @@ func (or *orderTracker) findLPForOrder(order *demandOrder) error {
 	lps, lpMiss := or.filterLPsForOrder(order)
 	if len(lps) == 0 {
 		return fmt.Errorf("no LPs found for order: %s", strings.Join(lpMiss, "; "))
+	}
+
+	if order.lpAddress != "" {
+		// check if the LP is still valid
+		for _, l := range lps {
+			if l.address == order.lpAddress {
+				// in case it changed
+				order.settlementValidated = l.rollapps[order.rollappId].settlementValidated
+				return nil
+			}
+		}
 	}
 
 	// randomize the list of LPs to avoid always selecting the same one

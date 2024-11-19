@@ -41,8 +41,8 @@ func newOrderEventer(
 }
 
 const (
-	createdEvent = "dymensionxyz.dymension.eibc.EventDemandOrderCreated"
-	updatedEvent = "dymensionxyz.dymension.eibc.EventDemandOrderFeeUpdated"
+	createdEvent    = "dymensionxyz.dymension.eibc.EventDemandOrderCreated"
+	updatedFeeEvent = "dymensionxyz.dymension.eibc.EventDemandOrderFeeUpdated"
 )
 
 func (e *orderEventer) start(ctx context.Context) error {
@@ -125,8 +125,16 @@ func (e *orderEventer) parseOrdersFromEvents(eventName string, res tmtypes.Resul
 			continue
 		}
 
-		validationWaitTime := e.orderTracker.validation.ValidationWaitTime
-		validDeadline := time.Now().Add(validationWaitTime)
+		if eventName == updatedFeeEvent {
+			existOrder, ok := e.orderTracker.pool.getOrder(id)
+			if ok {
+				// update the fee and price of the order
+				existOrder.fee = fee
+				existOrder.price = price
+				e.orderTracker.pool.upsertOrder(existOrder)
+				continue
+			}
+		}
 
 		order := &demandOrder{
 			id:            id,
@@ -135,7 +143,7 @@ func (e *orderEventer) parseOrdersFromEvents(eventName string, res tmtypes.Resul
 			fee:           fee,
 			rollappId:     rollapps[i],
 			proofHeight:   proofHeight,
-			validDeadline: validDeadline,
+			validDeadline: time.Now().Add(e.orderTracker.validation.WaitTime),
 			from:          "event",
 		}
 
@@ -160,8 +168,8 @@ func (e *orderEventer) subscribeToPendingDemandOrders(ctx context.Context) error
 }
 
 func (e *orderEventer) subscribeToUpdatedDemandOrders(ctx context.Context) error {
-	query := fmt.Sprintf("%s.packet_status='PENDING'", updatedEvent)
-	return e.subscribeToEvent(ctx, updatedEvent, query, e.enqueueEventOrders)
+	query := fmt.Sprintf("%s.packet_status='PENDING'", updatedFeeEvent)
+	return e.subscribeToEvent(ctx, updatedFeeEvent, query, e.enqueueEventOrders)
 }
 
 func (e *orderEventer) subscribeToEvent(ctx context.Context, event string, query string, callback func(ctx context.Context, name string, event tmtypes.ResultEvent) error) error {

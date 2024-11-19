@@ -58,7 +58,8 @@ func TestOrderClient(t *testing.T) {
 					BatchSize: 4,
 				},
 				Validation: config.ValidationConfig{
-					ValidationWaitTime: time.Second,
+					WaitTime: time.Second,
+					Interval: time.Second,
 				},
 			},
 			lpConfigs: []lpConfig{
@@ -275,12 +276,12 @@ func TestOrderClient(t *testing.T) {
 			for _, order := range tt.updateOrders {
 				oc.orderEventer.eventClient.(*mockNodeClient).updateOrderCh <- coretypes.ResultEvent{
 					Events: map[string][]string{
-						updatedEvent + ".order_id":      {order.EibcOrderId},
-						updatedEvent + ".price":         {order.Price},
-						updatedEvent + ".packet_status": {"PENDING"},
-						updatedEvent + ".new_fee":       {order.Fee},
-						updatedEvent + ".rollapp_id":    {order.RollappId},
-						updatedEvent + ".proof_height":  {order.ProofHeight},
+						updatedFeeEvent + ".order_id":      {order.EibcOrderId},
+						updatedFeeEvent + ".price":         {order.Price},
+						updatedFeeEvent + ".packet_status": {"PENDING"},
+						updatedFeeEvent + ".new_fee":       {order.Fee},
+						updatedFeeEvent + ".rollapp_id":    {order.RollappId},
+						updatedFeeEvent + ".proof_height":  {order.ProofHeight},
 					},
 				}
 			}
@@ -339,6 +340,7 @@ func setupTestOrderClient(
 		&cfg.Validation,
 		orderCh,
 		cfg.OrderPolling.Interval,
+		cfg.Validation.Interval,
 		logger,
 	)
 	ordTracker.getLPGrants = grantsFn
@@ -469,10 +471,10 @@ func (m *mockNodeClient) BroadcastTx(string, ...sdk.Msg) (cosmosclient.Response,
 }
 
 func (m *mockNodeClient) Subscribe(_ context.Context, _ string, query string, _ ...int) (out <-chan coretypes.ResultEvent, err error) {
-	switch query {
-	case createdEvent:
+	switch {
+	case strings.Contains(query, createdEvent):
 		return m.addOrderCh, nil
-	case updatedEvent:
+	case strings.Contains(query, updatedFeeEvent):
 		return m.updateOrderCh, nil
 	}
 	return nil, fmt.Errorf("invalid query")

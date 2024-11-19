@@ -162,8 +162,15 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 			continue
 		}
 
-		validationWaitTime := p.orderTracker.validation.ValidationWaitTime
-		validDeadline := time.Now().Add(validationWaitTime)
+		// in case tracked order got updated
+		existOrder, ok := p.orderTracker.pool.getOrder(order.EibcOrderId)
+		if ok {
+			// update the fee and price of the order
+			existOrder.fee = fee
+			existOrder.price = price
+			p.orderTracker.pool.upsertOrder(existOrder)
+			continue
+		}
 
 		newOrder := &demandOrder{
 			id:            order.EibcOrderId,
@@ -172,7 +179,7 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 			denom:         fee.Denom,
 			rollappId:     order.RollappId,
 			proofHeight:   proofHeight,
-			validDeadline: validDeadline,
+			validDeadline: time.Now().Add(p.orderTracker.validation.WaitTime),
 			from:          "indexer",
 		}
 

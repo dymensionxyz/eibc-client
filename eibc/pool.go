@@ -22,6 +22,14 @@ func (op *orderPool) addOrder(order ...*demandOrder) {
 	}
 }
 
+func (op *orderPool) getOrder(id string) (*demandOrder, bool) {
+	op.opmu.Lock()
+	defer op.opmu.Unlock()
+
+	order, ok := op.orders[id]
+	return order, ok
+}
+
 func (op *orderPool) upsertOrder(order ...*demandOrder) {
 	op.opmu.Lock()
 	defer op.opmu.Unlock()
@@ -38,22 +46,17 @@ func (op *orderPool) removeOrder(id string) {
 	delete(op.orders, id)
 }
 
-func (op *orderPool) hasOrder(id string) bool {
-	op.opmu.Lock()
-	defer op.opmu.Unlock()
-
-	_, ok := op.orders[id]
-	return ok
-}
-
 func (op *orderPool) popOrders(limit int) []*demandOrder {
 	op.opmu.Lock()
 	defer op.opmu.Unlock()
 
 	var orders []*demandOrder
 	for _, order := range op.orders {
+		if order.checking {
+			continue
+		}
 		orders = append(orders, order)
-		delete(op.orders, order.id)
+		order.checking = true
 		if len(orders) == limit {
 			break
 		}

@@ -63,7 +63,7 @@ policy.json
                       --spend-limit 10000adym \
                       --rollapp rollapp1 \ 
                       --denoms "adym,uatom" \
-                      --min-lp-fee-percentage "0.1" \
+                      --min-fee-percentage "0.1" \
                       --max-price 10000adym \
                       --operator-fee-share 0.1 \
                       --settlement-validated --fees 1dym -y
