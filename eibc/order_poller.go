@@ -148,6 +148,12 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 			continue
 		}
 
+		amount, ok := sdk.NewIntFromString(order.Amount)
+		if !ok {
+			p.logger.Error("failed to parse amount", zap.String("amount", order.Amount))
+			continue
+		}
+
 		priceInt, ok := sdk.NewIntFromString(order.Price)
 		if !ok {
 			p.logger.Error("failed to parse price", zap.String("price", order.Price))
@@ -175,6 +181,7 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 		newOrder := &demandOrder{
 			id:            order.EibcOrderId,
 			price:         price,
+			amount:        amount,
 			fee:           fee,
 			denom:         fee.Denom,
 			rollappId:     order.RollappId,

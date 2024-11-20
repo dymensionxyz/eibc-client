@@ -34,8 +34,8 @@ var RootCmd = &cobra.Command{
 
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Initialize the order client",
-	Long:  `Initialize the order client by generating a config file with default values.`,
+	Short: "Initialize the eibc client",
+	Long:  `Initialize the eibc client by generating a config file with default values.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg := config.Config{}
 		if err := viper.Unmarshal(&cfg); err != nil {
@@ -61,8 +61,8 @@ var initCmd = &cobra.Command{
 
 var startCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Start the order client",
-	Long:  `Start the order client that scans for demand orders and fulfills them.`,
+	Short: "Start the eibc client",
+	Long:  `Start the eibc client that scans for demand orders and fulfills them.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		viper.AutomaticEnv()
 
@@ -91,7 +91,7 @@ var startCmd = &cobra.Command{
 
 		oc, err := eibc.NewOrderClient(cfg, logger)
 		if err != nil {
-			log.Fatalf("failed to create order client: %v", err)
+			log.Fatalf("failed to create eibc client: %v", err)
 		}
 
 		if cfg.Fulfillers.Scale == 0 {
@@ -100,7 +100,7 @@ var startCmd = &cobra.Command{
 		}
 
 		if err := oc.Start(cmd.Context()); err != nil {
-			log.Fatalf("failed to start order client: %v", err)
+			log.Fatalf("failed to start eibc client: %v", err)
 		}
 	},
 }

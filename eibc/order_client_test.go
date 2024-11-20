@@ -14,14 +14,13 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/x/authz"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
+	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	rpcclient "github.com/tendermint/tendermint/rpc/client"
 	coretypes "github.com/tendermint/tendermint/rpc/core/types"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
-
-	"github.com/dymensionxyz/cosmosclient/cosmosclient"
 
 	"github.com/dymensionxyz/eibc-client/config"
 	"github.com/dymensionxyz/eibc-client/types"
@@ -231,6 +230,7 @@ func TestOrderClient(t *testing.T) {
 				lpAddr := fmt.Sprintf("lp-%d-address", i+1)
 				grants = append(grants, &authz.GrantAuthorization{
 					Granter:       lpAddr,
+					Grantee:       "policyAddress",
 					Authorization: a,
 				})
 				lpBalances[lpAddr] = g.balance

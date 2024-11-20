@@ -7,9 +7,8 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/bech32"
-	"go.uber.org/zap"
-
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
+	"go.uber.org/zap"
 
 	"github.com/dymensionxyz/eibc-client/config"
 )

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/cosmos/cosmos-sdk/client"
@@ -87,17 +88,14 @@ func (ol *orderFulfiller) processBatch(batch []*demandOrder) error {
 	}
 
 	var (
-		ids   []string
-		lps   []string
-		lpMap = make(map[string]struct{})
+		ids []string
+		lps []string
 	)
 	for _, order := range batch {
 		ids = append(ids, order.id)
-		lpMap[order.lpAddress] = struct{}{}
-	}
-
-	for l := range lpMap {
-		lps = append(lps, l)
+		if !slices.Contains(lps, order.lpAddress) {
+			lps = append(lps, order.lpAddress)
+		}
 	}
 
 	ol.logger.Info("fulfilling orders", zap.Strings("ids", ids), zap.Strings("lps", lps))
