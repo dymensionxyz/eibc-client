@@ -161,7 +161,7 @@ func (or *orderTracker) getValidAndRetryOrders(ctx context.Context, orders []*de
 		}
 		valid, err := or.fullNodeClient.BlockValidated(ctx, order.rollappId, order.proofHeight, expectedValidationLevel)
 		if err != nil {
-			or.logger.Error("failed to check validation of block", zap.Error(err))
+			or.logger.Error("failed to check validation of block", zap.String("order_id", order.id), zap.Error(err))
 			continue
 		}
 		if valid {
@@ -236,7 +236,6 @@ func (or *orderTracker) canFulfillOrder(order *demandOrder) bool {
 	if !or.isRollappSupported(order.rollappId) {
 		return false
 	}
-
 	return true
 }
 
@@ -317,8 +316,7 @@ func (or *orderTracker) filterLPsForOrder(order *demandOrder) ([]*lp, []string) 
 		}
 
 		// check the fee is at least the minimum for what the lp wants
-		amountDec := sdk.NewDecFromInt(order.price[0].Amount.Add(order.fee.Amount))
-		minFee := amountDec.Mul(rollapp.minFeePercentage).RoundInt()
+		minFee := sdk.NewDecFromInt(order.fee.Amount).Mul(rollapp.minFeePercentage).RoundInt()
 
 		if order.fee.Amount.LT(minFee) {
 			lpSkip = append(lpSkip, fmt.Sprintf("%s: min_fee", lp.address))

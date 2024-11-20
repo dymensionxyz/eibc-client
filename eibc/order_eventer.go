@@ -94,6 +94,7 @@ func (e *orderEventer) parseOrdersFromEvents(eventName string, res tmtypes.Resul
 	}
 
 	prices := res.Events[eventName+".price"]
+	amounts := res.Events[eventName+".amount"]
 	fees := res.Events[eventName+".new_fee"]
 	if eventName == createdEvent {
 		fees = res.Events[eventName+".fee"]
@@ -110,6 +111,12 @@ func (e *orderEventer) parseOrdersFromEvents(eventName string, res tmtypes.Resul
 		}
 
 		if fees[i] == "" {
+			continue
+		}
+
+		amount, ok := sdk.NewIntFromString(amounts[i])
+		if !ok {
+			e.logger.Error("failed to parse amount", zap.String("amount", amounts[i]))
 			continue
 		}
 
@@ -140,6 +147,7 @@ func (e *orderEventer) parseOrdersFromEvents(eventName string, res tmtypes.Resul
 			id:            id,
 			denom:         fee.Denom,
 			price:         price,
+			amount:        amount,
 			fee:           fee,
 			rollappId:     rollapps[i],
 			proofHeight:   proofHeight,
