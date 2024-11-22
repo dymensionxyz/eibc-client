@@ -52,8 +52,9 @@ type OperatorConfig struct {
 }
 
 type ValidationConfig struct {
-	FallbackLevel      ValidationLevel `mapstructure:"fallback_level"`
-	ValidationWaitTime time.Duration   `mapstructure:"validation_wait_time"`
+	FallbackLevel ValidationLevel `mapstructure:"fallback_level"`
+	WaitTime      time.Duration   `mapstructure:"wait_time"`
+	Interval      time.Duration   `mapstructure:"interval"`
 }
 
 type RollappConfig struct {
@@ -79,7 +80,8 @@ const (
 	defaultMaxOrdersPerTx          = 10
 	defaultOrderRefreshInterval    = 30 * time.Second
 	defaultValidationFallbackLevel = "p2p"
-	defaultValidationWaitTime      = "60m"
+	defaultValidationWaitTime      = "61m"
+	defaultOrderValidationInterval = "5m"
 )
 
 type ValidationLevel string
@@ -125,7 +127,8 @@ func InitConfig() {
 	viper.SetDefault("fulfillers.policy_address", "<your-policy-address>")
 
 	viper.SetDefault("validation.fallback_level", defaultValidationFallbackLevel)
-	viper.SetDefault("validation.validation_wait_time", defaultValidationWaitTime)
+	viper.SetDefault("validation.wait_time", defaultValidationWaitTime)
+	viper.SetDefault("validation.interval", defaultOrderValidationInterval)
 
 	viper.SetDefault("rollapps.example_1234-1.full_nodes", []string{"http://localhost:26657"})
 	viper.SetDefault("rollapps.example_1234-1.min_confirmations", "1")

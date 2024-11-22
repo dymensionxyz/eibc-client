@@ -41,7 +41,8 @@ func newOrderEventer(
 }
 
 const (
-	createdEvent = "dymensionxyz.dymension.eibc.EventDemandOrderCreated"
+	createdEvent    = "dymensionxyz.dymension.eibc.EventDemandOrderCreated"
+	updatedFeeEvent = "dymensionxyz.dymension.eibc.EventDemandOrderFeeUpdated"
 )
 
 func (e *orderEventer) start(ctx context.Context) error {
@@ -53,42 +54,53 @@ func (e *orderEventer) start(ctx context.Context) error {
 		return fmt.Errorf("failed to subscribe to pending demand orders: %w", err)
 	}
 
+	if err := e.subscribeToUpdatedDemandOrders(ctx); err != nil {
+		return fmt.Errorf("failed to subscribe to updated demand orders: %w", err)
+	}
+
 	return nil
 }
 
-func (e *orderEventer) enqueueEventOrders(_ context.Context, res tmtypes.ResultEvent) error {
-	newOrders := e.parseOrdersFromEvents(res)
-	if len(newOrders) == 0 {
+func (e *orderEventer) enqueueEventOrders(_ context.Context, eventName string, res tmtypes.ResultEvent) error {
+	orders := e.parseOrdersFromEvents(eventName, res)
+	if len(orders) == 0 {
 		return nil
 	}
 
+	d := "updated"
+	if eventName == createdEvent {
+		d = "new"
+	}
+	e.orderTracker.trackOrders(orders...)
+
 	if e.logger.Level() <= zap.DebugLevel {
-		ids := make([]string, 0, len(newOrders))
-		for _, order := range newOrders {
+		ids := make([]string, 0, len(orders))
+		for _, order := range orders {
 			ids = append(ids, order.id)
 		}
-		e.logger.Debug("new demand orders", zap.Strings("ids", ids))
+		e.logger.Debug(fmt.Sprintf("%s demand orders", d), zap.Strings("ids", ids))
 	} else {
-		e.logger.Info("new demand orders", zap.Int("count", len(newOrders)))
+		e.logger.Info(fmt.Sprintf("%s demand orders", d), zap.Int("count", len(orders)))
 	}
-
-	e.orderTracker.addOrder(newOrders...)
 
 	return nil
 }
 
-func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandOrder {
-	ids := res.Events[createdEvent+".order_id"]
+func (e *orderEventer) parseOrdersFromEvents(eventName string, res tmtypes.ResultEvent) []*demandOrder {
+	ids := res.Events[eventName+".order_id"]
 
 	if len(ids) == 0 {
 		return nil
 	}
 
-	prices := res.Events[createdEvent+".price"]
-	fees := res.Events[createdEvent+".fee"]
-	statuses := res.Events[createdEvent+".packet_status"]
-	rollapps := res.Events[createdEvent+".rollapp_id"]
-	heights := res.Events[createdEvent+".proof_height"]
+	prices := res.Events[eventName+".price"]
+	amounts := res.Events[eventName+".amount"]
+	fees := res.Events[eventName+".new_fee"]
+	if eventName == createdEvent {
+		fees = res.Events[eventName+".fee"]
+	}
+	rollapps := res.Events[eventName+".rollapp_id"]
+	proofHeights := res.Events[eventName+".proof_height"]
 	newOrders := make([]*demandOrder, 0, len(ids))
 
 	for i, id := range ids {
@@ -102,30 +114,44 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 			continue
 		}
 
+		amount, ok := sdk.NewIntFromString(amounts[i])
+		if !ok {
+			e.logger.Error("failed to parse amount", zap.String("amount", amounts[i]))
+			continue
+		}
+
 		fee, err := sdk.ParseCoinNormalized(fees[i])
 		if err != nil {
 			e.logger.Error("failed to parse fee", zap.Error(err))
 			continue
 		}
 
-		height, err := strconv.ParseInt(heights[i], 10, 64)
+		proofHeight, err := strconv.ParseInt(proofHeights[i], 10, 64)
 		if err != nil {
-			e.logger.Error("failed to parse block height", zap.Error(err))
+			e.logger.Error("failed to parse proof height", zap.Error(err))
 			continue
 		}
 
-		validationWaitTime := e.orderTracker.validation.ValidationWaitTime
-		validDeadline := time.Now().Add(validationWaitTime)
+		if eventName == updatedFeeEvent {
+			existOrder, ok := e.orderTracker.pool.getOrder(id)
+			if ok {
+				// update the fee and price of the order
+				existOrder.fee = fee
+				existOrder.price = price
+				e.orderTracker.pool.upsertOrder(existOrder)
+				continue
+			}
+		}
 
 		order := &demandOrder{
 			id:            id,
 			denom:         fee.Denom,
 			price:         price,
+			amount:        amount,
 			fee:           fee,
-			status:        statuses[i],
 			rollappId:     rollapps[i],
-			proofHeight:   height,
-			validDeadline: validDeadline,
+			proofHeight:   proofHeight,
+			validDeadline: time.Now().Add(e.orderTracker.validation.WaitTime),
 			from:          "event",
 		}
 
@@ -145,11 +171,16 @@ func (e *orderEventer) parseOrdersFromEvents(res tmtypes.ResultEvent) []*demandO
 }
 
 func (e *orderEventer) subscribeToPendingDemandOrders(ctx context.Context) error {
-	query := fmt.Sprintf("%s.is_fulfilled='false'", createdEvent)
-	return e.subscribeToEvent(ctx, "pending demand", query, e.enqueueEventOrders)
+	query := fmt.Sprintf("%s.packet_status='PENDING'", createdEvent)
+	return e.subscribeToEvent(ctx, createdEvent, query, e.enqueueEventOrders)
 }
 
-func (e *orderEventer) subscribeToEvent(ctx context.Context, event string, query string, callback func(ctx context.Context, event tmtypes.ResultEvent) error) error {
+func (e *orderEventer) subscribeToUpdatedDemandOrders(ctx context.Context) error {
+	query := fmt.Sprintf("%s.packet_status='PENDING'", updatedFeeEvent)
+	return e.subscribeToEvent(ctx, updatedFeeEvent, query, e.enqueueEventOrders)
+}
+
+func (e *orderEventer) subscribeToEvent(ctx context.Context, event string, query string, callback func(ctx context.Context, name string, event tmtypes.ResultEvent) error) error {
 	resCh, err := e.eventClient.Subscribe(ctx, e.subscriberID, query)
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to %s events: %w", event, err)
@@ -159,7 +190,7 @@ func (e *orderEventer) subscribeToEvent(ctx context.Context, event string, query
 		for {
 			select {
 			case res := <-resCh:
-				if err := callback(ctx, res); err != nil {
+				if err := callback(ctx, event, res); err != nil {
 					e.logger.Error(fmt.Sprintf("failed to process %s event", event), zap.Error(err))
 				}
 			case <-ctx.Done():

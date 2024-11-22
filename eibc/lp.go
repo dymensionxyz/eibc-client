@@ -104,6 +104,11 @@ func (or *orderTracker) loadLPs(ctx context.Context) error {
 			continue
 		}
 
+		if grant.Granter == "" || grant.Grantee == "" {
+			or.logger.Error("invalid grant", zap.Any("grant", grant))
+			continue
+		}
+
 		g := new(types.FulfillOrderAuthorization)
 		if err = proto.Unmarshal(grant.Authorization.Value, g); err != nil {
 			return fmt.Errorf("failed to unmarshal grant: %w", err)

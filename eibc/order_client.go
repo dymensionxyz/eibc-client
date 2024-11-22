@@ -7,9 +7,8 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/bech32"
-	"go.uber.org/zap"
-
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
+	"go.uber.org/zap"
 
 	"github.com/dymensionxyz/eibc-client/config"
 )
@@ -30,9 +29,7 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 
 	//nolint:gosec
 	subscriberID := fmt.Sprintf("eibc-client-%d", rand.Int())
-
 	orderCh := make(chan []*demandOrder, config.NewOrderBufferSize)
-	fulfilledOrdersCh := make(chan *orderBatch, config.NewOrderBufferSize) // TODO: make buffer size configurable
 
 	hubClient, err := getHubClient(cfg)
 	if err != nil {
@@ -57,12 +54,12 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 		cfg.Fulfillers.PolicyAddress,
 		minOperatorFeeShare,
 		fullNodeClient,
-		fulfilledOrdersCh,
 		subscriberID,
 		cfg.Fulfillers.BatchSize,
 		&cfg.Validation,
 		orderCh,
 		cfg.OrderPolling.Interval, // we can use the same interval for order polling and LP balance checking
+		cfg.Validation.Interval,
 		logger,
 	)
 
@@ -145,7 +142,6 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 			cfg.Fulfillers.PolicyAddress,
 			cClient,
 			orderCh,
-			fulfilledOrdersCh,
 			ordTracker.releaseAllReservedOrdersFunds,
 			ordTracker.debitAllReservedOrdersFunds,
 		)

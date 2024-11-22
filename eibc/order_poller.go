@@ -23,13 +23,10 @@ type orderPoller struct {
 	indexerClient *http.Client
 	logger        *zap.Logger
 
-	getOrders    func() ([]Order, error)
-	orderTracker *orderTracker
-
-	skippedOrders map[string]struct{}
+	getOrders       func() ([]Order, error)
+	orderTracker    *orderTracker
+	lastBlockHeight uint64
 }
-
-const maxSkippedOrders = 1000
 
 func newOrderPoller(
 	chainID string,
@@ -44,14 +41,13 @@ func newOrderPoller(
 		logger:        logger.With(zap.String("module", "order-poller")),
 		orderTracker:  orderTracker,
 		indexerClient: &http.Client{Timeout: 25 * time.Second},
-		skippedOrders: make(map[string]struct{}),
 	}
 	o.getOrders = o.getDemandOrdersFromIndexer
 	return o
 }
 
 const (
-	ordersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: {equalTo: EibcPending}}) {nodes { eibcOrderId amount proofHeight price rollappId eibcFee }}}"}`
+	ordersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: {equalTo: EibcPending}, blockHeight: { greaterThan: \"%s\" }}) {nodes { eibcOrderId amount proofHeight blockHeight price rollappId eibcFee }}}"}`
 )
 
 type Order struct {
@@ -61,6 +57,7 @@ type Order struct {
 	Fee         string `json:"eibcFee"`
 	RollappId   string `json:"rollappId"`
 	ProofHeight string `json:"proofHeight"`
+	BlockHeight string `json:"blockHeight"`
 }
 
 type ordersResponse struct {
@@ -99,8 +96,13 @@ func (p *orderPoller) pollPendingDemandOrders() error {
 
 	demandOrders := make([]Order, 0, len(newDemandOrders))
 	for _, order := range newDemandOrders {
-		if _, ok := p.skippedOrders[order.EibcOrderId]; ok {
+		blockHeight, err := strconv.ParseUint(order.BlockHeight, 10, 64)
+		if err != nil {
+			p.logger.Error("failed to parse block height", zap.Error(err))
 			continue
+		}
+		if blockHeight > p.lastBlockHeight {
+			p.lastBlockHeight = blockHeight
 		}
 		demandOrders = append(demandOrders, order)
 	}
@@ -108,7 +110,6 @@ func (p *orderPoller) pollPendingDemandOrders() error {
 	newOrders := p.convertOrders(demandOrders)
 
 	if len(newOrders) == 0 {
-		p.logger.Debug("no new orders")
 		return nil
 	}
 
@@ -122,7 +123,7 @@ func (p *orderPoller) pollPendingDemandOrders() error {
 		p.logger.Info("new demand orders", zap.Int("count", len(newOrders)))
 	}
 
-	p.orderTracker.addOrder(newOrders...)
+	p.orderTracker.trackOrders(newOrders...)
 
 	return nil
 }
@@ -147,6 +148,12 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 			continue
 		}
 
+		amount, ok := sdk.NewIntFromString(order.Amount)
+		if !ok {
+			p.logger.Error("failed to parse amount", zap.String("amount", order.Amount))
+			continue
+		}
+
 		priceInt, ok := sdk.NewIntFromString(order.Price)
 		if !ok {
 			p.logger.Error("failed to parse price", zap.String("price", order.Price))
@@ -161,17 +168,25 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 			continue
 		}
 
-		validationWaitTime := p.orderTracker.validation.ValidationWaitTime
-		validDeadline := time.Now().Add(validationWaitTime)
+		// in case tracked order got updated
+		existOrder, ok := p.orderTracker.pool.getOrder(order.EibcOrderId)
+		if ok {
+			// update the fee and price of the order
+			existOrder.fee = fee
+			existOrder.price = price
+			p.orderTracker.pool.upsertOrder(existOrder)
+			continue
+		}
 
 		newOrder := &demandOrder{
 			id:            order.EibcOrderId,
 			price:         price,
+			amount:        amount,
 			fee:           fee,
 			denom:         fee.Denom,
 			rollappId:     order.RollappId,
 			proofHeight:   proofHeight,
-			validDeadline: validDeadline,
+			validDeadline: time.Now().Add(p.orderTracker.validation.WaitTime),
 			from:          "indexer",
 		}
 
@@ -181,9 +196,6 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 
 		if err := p.orderTracker.findLPForOrder(newOrder); err != nil {
 			p.logger.Debug("failed to find LP for order", zap.Error(err), zap.String("order_id", newOrder.id))
-			if len(p.skippedOrders) < maxSkippedOrders {
-				p.skippedOrders[newOrder.id] = struct{}{}
-			}
 			continue
 		}
 
@@ -197,9 +209,7 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 }
 
 func (p *orderPoller) getDemandOrdersFromIndexer() ([]Order, error) {
-	p.logger.Debug("getting demand orders from indexer")
-
-	queryStr := fmt.Sprintf(ordersQuery, p.chainID)
+	queryStr := fmt.Sprintf(ordersQuery, p.chainID, fmt.Sprint(p.lastBlockHeight))
 	body := strings.NewReader(queryStr)
 
 	resp, err := p.indexerClient.Post(p.indexerURL, "application/json", body)

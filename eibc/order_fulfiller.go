@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/cosmos/cosmos-sdk/client"
@@ -28,7 +29,6 @@ type orderFulfiller struct {
 	releaseAllReservedOrdersFunds func(demandOrder ...*demandOrder)
 	debitAllReservedOrdersFunds   func(demandOrder ...*demandOrder)
 	newOrdersCh                   chan []*demandOrder
-	fulfilledOrdersCh             chan<- *orderBatch
 }
 
 type cosmosClient interface {
@@ -43,7 +43,6 @@ func newOrderFulfiller(
 	policyAddress string,
 	cClient cosmosClient,
 	newOrdersCh chan []*demandOrder,
-	fulfilledOrdersCh chan<- *orderBatch,
 	releaseAllReservedOrdersFunds func(demandOrder ...*demandOrder),
 	debitAllReservedOrdersFunds func(demandOrder ...*demandOrder),
 ) (*orderFulfiller, error) {
@@ -52,7 +51,6 @@ func newOrderFulfiller(
 		policyAddress:                 policyAddress,
 		operatorAddress:               operatorAddress,
 		client:                        cClient,
-		fulfilledOrdersCh:             fulfilledOrdersCh,
 		newOrdersCh:                   newOrdersCh,
 		releaseAllReservedOrdersFunds: releaseAllReservedOrdersFunds,
 		debitAllReservedOrdersFunds:   debitAllReservedOrdersFunds,
@@ -90,17 +88,14 @@ func (ol *orderFulfiller) processBatch(batch []*demandOrder) error {
 	}
 
 	var (
-		ids   []string
-		lps   []string
-		lpMap = make(map[string]struct{})
+		ids []string
+		lps []string
 	)
 	for _, order := range batch {
 		ids = append(ids, order.id)
-		lpMap[order.lpAddress] = struct{}{}
-	}
-
-	for l := range lpMap {
-		lps = append(lps, l)
+		if !slices.Contains(lps, order.lpAddress) {
+			lps = append(lps, order.lpAddress)
+		}
 	}
 
 	ol.logger.Info("fulfilling orders", zap.Strings("ids", ids), zap.Strings("lps", lps))
@@ -113,16 +108,6 @@ func (ol *orderFulfiller) processBatch(batch []*demandOrder) error {
 	}
 
 	ol.logger.Info("orders fulfilled", zap.Strings("ids", ids))
-
-	go func() {
-		if len(ids) == 0 {
-			return
-		}
-
-		ol.fulfilledOrdersCh <- &orderBatch{
-			orders: batch,
-		}
-	}()
 
 	return nil
 }

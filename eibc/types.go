@@ -14,15 +14,16 @@ type demandOrder struct {
 	id                  string
 	denom               string
 	price               sdk.Coins
+	amount              sdk.Int
 	fee                 sdk.Coin
 	rollappId           string
-	status              string
 	proofHeight         int64
 	validDeadline       time.Time
 	settlementValidated bool
 	operatorFeePart     sdk.Dec
 	lpAddress           string
 	from                string
+	checking            bool
 }
 
 type account struct {

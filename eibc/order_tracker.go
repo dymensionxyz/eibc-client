@@ -38,9 +38,9 @@ type orderTracker struct {
 	batchSize              int
 	validation             *config.ValidationConfig
 	toCheckOrdersCh        chan []*demandOrder
-	fulfilledOrdersCh      chan *orderBatch
 	subscriberID           string
 	balanceRefreshInterval time.Duration
+	validateOrdersInterval time.Duration
 }
 
 type (
@@ -53,12 +53,12 @@ func newOrderTracker(
 	policyAddress string,
 	minOperatorFeeShare sdk.Dec,
 	fullNodeClient *nodeClient,
-	fulfilledOrdersCh chan *orderBatch,
 	subscriberID string,
 	batchSize int,
 	validation *config.ValidationConfig,
 	ordersCh chan<- []*demandOrder,
-	balanceRefreshInterval time.Duration,
+	balanceRefreshInterval,
+	validateOrdersInterval time.Duration,
 	logger *zap.Logger,
 ) *orderTracker {
 	azc := authz.NewQueryClient(hubClient.Context())
@@ -70,7 +70,6 @@ func newOrderTracker(
 		minOperatorFeeShare:    minOperatorFeeShare,
 		fullNodeClient:         fullNodeClient,
 		pool:                   orderPool{orders: make(map[string]*demandOrder)},
-		fulfilledOrdersCh:      fulfilledOrdersCh,
 		lps:                    make(map[string]*lp),
 		batchSize:              batchSize,
 		validation:             validation,
@@ -79,8 +78,8 @@ func newOrderTracker(
 		logger:                 logger.With(zap.String("module", "order-resolver")),
 		subscriberID:           subscriberID,
 		balanceRefreshInterval: balanceRefreshInterval,
+		validateOrdersInterval: validateOrdersInterval,
 		toCheckOrdersCh:        make(chan []*demandOrder, batchSize),
-		fulfilledOrders:        make(map[string]*demandOrder),
 	}
 }
 
@@ -91,9 +90,8 @@ func (or *orderTracker) start(ctx context.Context) error {
 
 	go or.lpLoader(ctx)
 	go or.balanceRefresher(ctx)
-	go or.pullOrders(ctx)
+	go or.orderValidator(ctx)
 	go or.enqueueValidOrders(ctx)
-	go or.fulfilledOrdersWorker(ctx)
 
 	return nil
 }
@@ -112,8 +110,8 @@ func (or *orderTracker) lpLoader(ctx context.Context) {
 	}
 }
 
-func (or *orderTracker) pullOrders(ctx context.Context) {
-	ticker := time.NewTicker(2 * time.Second)
+func (or *orderTracker) orderValidator(ctx context.Context) {
+	ticker := time.NewTicker(or.validateOrdersInterval)
 	for {
 		select {
 		case <-ctx.Done():
@@ -163,20 +161,29 @@ func (or *orderTracker) getValidAndRetryOrders(ctx context.Context, orders []*de
 		}
 		valid, err := or.fullNodeClient.BlockValidated(ctx, order.rollappId, order.proofHeight, expectedValidationLevel)
 		if err != nil {
-			or.logger.Error("failed to check validation of block", zap.Error(err))
+			or.logger.Error("failed to check validation of block", zap.String("order_id", order.id), zap.Error(err))
 			continue
 		}
 		if valid {
+			or.pool.removeOrder(order.id)
 			validOrders = append(validOrders, order)
 			continue
 		}
 		if or.isOrderExpired(order) {
-			or.releaseAllReservedOrdersFunds(order)
+			or.evictOrder(order)
 			or.logger.Debug("order has expired", zap.String("id", order.id))
 			continue
 		}
 		or.logger.Debug("order is not valid yet", zap.String("id", order.id), zap.String("from", order.from))
+
+		if !or.orderFulfillable(order) {
+			or.evictOrder(order)
+			or.logger.Debug("order is not fulfillable anymore", zap.String("id", order.id))
+			continue
+		}
+
 		// order is not valid yet, so add it back to the pool
+		order.checking = false
 		invalidOrders = append(invalidOrders, order)
 	}
 	return
@@ -187,7 +194,21 @@ func (or *orderTracker) isOrderExpired(order *demandOrder) bool {
 	return time.Now().After(order.validDeadline)
 }
 
-func (or *orderTracker) addOrder(orders ...*demandOrder) {
+func (or *orderTracker) orderFulfillable(order *demandOrder) bool {
+	if err := or.findLPForOrder(order); err != nil {
+		or.logger.Debug("failed to find LP for order", zap.Error(err), zap.String("order_id", order.id))
+		return false
+	}
+
+	return true
+}
+
+func (or *orderTracker) evictOrder(order *demandOrder) {
+	or.pool.removeOrder(order.id)
+	or.releaseAllReservedOrdersFunds(order)
+}
+
+func (or *orderTracker) trackOrders(orders ...*demandOrder) {
 	// - in mode "sequencer" we send a batch directly to be fulfilled,
 	// and any orders that overflow the batch are added to the pool
 	// - in mode "p2p" and "settlement" all orders are added to the pool
@@ -207,52 +228,14 @@ func (or *orderTracker) addOrder(orders ...*demandOrder) {
 		or.outputOrdersCh <- batchToSend
 		orders = batchToPool
 	}
-	or.pool.addOrder(orders...)
+	or.pool.upsertOrder(orders...)
 	go or.checkOrders()
-}
-
-func (or *orderTracker) fulfilledOrdersWorker(ctx context.Context) {
-	for {
-		select {
-		case batch := <-or.fulfilledOrdersCh:
-			if err := or.addFulfilledOrders(batch); err != nil {
-				or.logger.Error("failed to add fulfilled orders", zap.Error(err))
-			}
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-// addFulfilledOrders adds the fulfilled orders to the fulfilledOrders cache, and removes them from the orderPool.
-// It also persists the state to the database.
-func (or *orderTracker) addFulfilledOrders(batch *orderBatch) error {
-	or.fomu.Lock()
-	for _, order := range batch.orders {
-		if len(order.price) == 0 {
-			continue
-		}
-		// add to cache
-		or.fulfilledOrders[order.id] = order
-		or.pool.removeOrder(order.id) // just in case it's still in the pool
-	}
-	or.fomu.Unlock()
-	return nil
 }
 
 func (or *orderTracker) canFulfillOrder(order *demandOrder) bool {
 	if !or.isRollappSupported(order.rollappId) {
 		return false
 	}
-
-	if or.isOrderFulfilled(order.id) {
-		return false
-	}
-	// we are already processing this order
-	if or.isOrderInPool(order.id) {
-		return false
-	}
-
 	return true
 }
 
@@ -263,6 +246,17 @@ func (or *orderTracker) findLPForOrder(order *demandOrder) error {
 	lps, lpMiss := or.filterLPsForOrder(order)
 	if len(lps) == 0 {
 		return fmt.Errorf("no LPs found for order: %s", strings.Join(lpMiss, "; "))
+	}
+
+	if order.lpAddress != "" {
+		// check if the LP is still valid
+		for _, l := range lps {
+			if l.address == order.lpAddress {
+				// in case it changed
+				order.settlementValidated = l.rollapps[order.rollappId].settlementValidated
+				return nil
+			}
+		}
 	}
 
 	// randomize the list of LPs to avoid always selecting the same one
@@ -322,8 +316,7 @@ func (or *orderTracker) filterLPsForOrder(order *demandOrder) ([]*lp, []string) 
 		}
 
 		// check the fee is at least the minimum for what the lp wants
-		amountDec := sdk.NewDecFromInt(order.price[0].Amount.Add(order.fee.Amount))
-		minFee := amountDec.Mul(rollapp.minFeePercentage).RoundInt()
+		minFee := sdk.NewDecFromInt(order.fee.Amount).Mul(rollapp.minFeePercentage).RoundInt()
 
 		if order.fee.Amount.LT(minFee) {
 			lpSkip = append(lpSkip, fmt.Sprintf("%s: min_fee", lp.address))
@@ -363,8 +356,4 @@ func (or *orderTracker) isOrderFulfilled(id string) bool {
 
 	_, ok := or.fulfilledOrders[id]
 	return ok
-}
-
-func (or *orderTracker) isOrderInPool(id string) bool {
-	return or.pool.hasOrder(id)
 }
