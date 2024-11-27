@@ -149,6 +149,7 @@ func TestOrderClient(t *testing.T) {
 			pollOrders: []Order{
 				{
 					EibcOrderId: "order1",
+					Amount:      "92",
 					Price:       "80",
 					Fee:         "12stake",
 					RollappId:   "rollapp1",
@@ -156,6 +157,7 @@ func TestOrderClient(t *testing.T) {
 					BlockHeight: "1",
 				}, {
 					EibcOrderId: "order2",
+					Amount:      "204",
 					Price:       "202",
 					Fee:         "2stake", // too low - won't fulfill
 					RollappId:   "rollapp2",
@@ -163,6 +165,7 @@ func TestOrderClient(t *testing.T) {
 					BlockHeight: "2",
 				}, {
 					EibcOrderId: "order5",
+					Amount:      "251",
 					Price:       "201",
 					Fee:         "50stake",
 					RollappId:   "rollapp1",
@@ -173,18 +176,21 @@ func TestOrderClient(t *testing.T) {
 			eventOrders: []Order{
 				{
 					EibcOrderId: "order3",
+					Amount:      "120",
 					Price:       "100adym",
 					Fee:         "20adym",
 					RollappId:   "rollapp2",
 					ProofHeight: "3",
 				}, {
 					EibcOrderId: "order4",
+					Amount:      "285",
 					Price:       "250adym",
 					Fee:         "35adym",
 					RollappId:   "rollapp2",
 					ProofHeight: "4",
 				}, {
 					EibcOrderId: "order6",
+					Amount:      "285",
 					Price:       "250adym",
 					Fee:         "35adym",
 					RollappId:   "rollapp2",
@@ -194,7 +200,8 @@ func TestOrderClient(t *testing.T) {
 			updateOrders: []Order{
 				{
 					EibcOrderId: "order2",
-					Price:       "202",
+					Amount:      "227",
+					Price:       "202adym",
 					Fee:         "25stake", // update so it will fulfill
 					RollappId:   "rollapp2",
 					ProofHeight: "2",
@@ -265,6 +272,7 @@ func TestOrderClient(t *testing.T) {
 					Events: map[string][]string{
 						createdEvent + ".order_id":      {order.EibcOrderId},
 						createdEvent + ".price":         {order.Price},
+						createdEvent + ".amount":        {order.Amount},
 						createdEvent + ".packet_status": {"PENDING"},
 						createdEvent + ".fee":           {order.Fee},
 						createdEvent + ".rollapp_id":    {order.RollappId},
@@ -278,6 +286,7 @@ func TestOrderClient(t *testing.T) {
 					Events: map[string][]string{
 						updatedFeeEvent + ".order_id":      {order.EibcOrderId},
 						updatedFeeEvent + ".price":         {order.Price},
+						updatedFeeEvent + ".amount":        {order.Amount},
 						updatedFeeEvent + ".packet_status": {"PENDING"},
 						updatedFeeEvent + ".new_fee":       {order.Fee},
 						updatedFeeEvent + ".rollapp_id":    {order.RollappId},
