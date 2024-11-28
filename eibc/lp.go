@@ -158,22 +158,22 @@ func (or *orderTracker) loadLPs(ctx context.Context) error {
 }
 
 func (or *orderTracker) releaseAllReservedOrdersFunds(demandOrder ...*demandOrder) {
+	or.lpmu.Lock()
+	defer or.lpmu.Unlock()
 	for _, order := range demandOrder {
-		or.lpmu.Lock()
 		if lp, ok := or.lps[order.lpAddress]; ok {
 			lp.releaseFunds(order.price)
 		}
-		or.lpmu.Unlock()
 	}
 }
 
 func (or *orderTracker) debitAllReservedOrdersFunds(demandOrder ...*demandOrder) {
+	or.lpmu.Lock()
+	defer or.lpmu.Unlock()
 	for _, order := range demandOrder {
-		or.lpmu.Lock()
 		if lp, ok := or.lps[order.lpAddress]; ok {
 			lp.debitReservedFunds(order.price)
 		}
-		or.lpmu.Unlock()
 	}
 }
 
@@ -190,6 +190,8 @@ func (or *orderTracker) balanceRefresher(ctx context.Context) {
 }
 
 func (or *orderTracker) refreshBalances(ctx context.Context) {
+	or.lpmu.Lock()
+	defer or.lpmu.Unlock()
 	for _, lp := range or.lps {
 		resp, err := or.getBalances(ctx, &banktypes.QuerySpendableBalancesRequest{
 			Address: lp.address,

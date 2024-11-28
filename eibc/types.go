@@ -6,10 +6,6 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
-type orderBatch struct {
-	orders []*demandOrder
-}
-
 type demandOrder struct {
 	id                  string
 	denom               string
