@@ -52,7 +52,7 @@ func newOrderPoller(client cosmosclient.Client,
 }
 
 const (
-	ordersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: {equalTo: EibcPending}}) {nodes { eibcOrderId denom amount destinationChannel time }}}"}`
+	ordersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: { in: [EibcPending, Refunding] }}) {nodes { eibcOrderId denom amount destinationChannel time }}}"}`
 )
 
 type Order struct {
