@@ -131,14 +131,25 @@ func (or *orderTracker) addFulfilledOrders(ctx context.Context, batch *orderBatc
 func (or *orderTracker) canFulfillOrder(id, denom string) bool {
 	// exclude orders whose denoms are not in the whitelist
 	if _, found := or.denomsWhitelist[strings.ToLower(denom)]; !found {
+		whitelist := make([]string, 0, len(or.denomsWhitelist))
+		for k := range or.denomsWhitelist {
+			whitelist = append(whitelist, k)
+		}
+		or.logger.Debug("denom not in whitelist",
+			zap.String("id", id),
+			zap.String("denom", denom),
+			zap.Strings("whitelist", whitelist),
+		)
 		return false
 	}
 
 	if or.isOrderFulfilled(id) {
+		or.logger.Debug("order already fulfilled", zap.String("id", id))
 		return false
 	}
 
 	if or.isOrderCurrent(id) {
+		or.logger.Debug("order already in progress", zap.String("id", id))
 		return false
 	}
 

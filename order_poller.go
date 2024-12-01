@@ -52,7 +52,7 @@ func newOrderPoller(client cosmosclient.Client,
 }
 
 const (
-	ordersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: { in: [EibcPending, Refunding] }}) {nodes { eibcOrderId denom amount destinationChannel time }}}"}`
+	ordersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: { in: [EibcPending, Refunding] }}) {nodes { eibcOrderId status denom amount destinationChannel time }}}"}`
 )
 
 type Order struct {
@@ -61,6 +61,7 @@ type Order struct {
 	Amount             string `json:"amount"`
 	DestinationChannel string `json:"destinationChannel"`
 	Time               string `json:"time"`
+	Status             string `json:"status"`
 	time               time.Time
 }
 
@@ -112,11 +113,13 @@ func (p *orderPoller) pollPendingDemandOrders(ctx context.Context) error {
 		order := &demandOrder{
 			id:     d.EibcOrderId,
 			amount: sdk.NewCoins(totalAmount),
+			status: d.Status,
 		}
 		unfulfilledOrders = append(unfulfilledOrders, order)
 	}
 
 	if len(unfulfilledOrders) == 0 {
+		p.logger.Debug("no new demand orders")
 		return nil
 	}
 
@@ -167,6 +170,10 @@ func (p *orderPoller) getDemandOrdersFromIndexer(ctx context.Context) ([]Order, 
 
 	// parse the time format of "1714742916108" into time.Time and sort by time
 	for _, order := range res.Data.IbcTransferDetails.Nodes {
+		if order.EibcOrderId == "" {
+			continue
+		}
+
 		if order.Time == "" {
 			continue
 		}
@@ -189,6 +196,7 @@ func (p *orderPoller) getDemandOrdersFromIndexer(ctx context.Context) ([]Order, 
 			Amount:             order.Amount,
 			DestinationChannel: order.DestinationChannel,
 			Time:               order.Time,
+			Status:             order.Status,
 			time:               time.Unix(timeUnix/1000, (timeUnix%1000)*int64(time.Millisecond)),
 		}
 
