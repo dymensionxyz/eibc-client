@@ -145,7 +145,7 @@ func (or *orderTracker) canFulfillOrder(id, denom string) bool {
 
 	if or.isOrderFulfilled(id) {
 		or.logger.Debug("order already fulfilled", zap.String("id", id))
-		// return false
+		return false
 	}
 
 	if or.isOrderCurrent(id) {
