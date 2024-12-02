@@ -93,8 +93,8 @@ func (or *orderTracker) loadTrackedOrders(ctx context.Context) error {
 	for _, order := range orders {
 		or.trackedOrders[order.ID] = struct{}{}
 	}
-	or.tomu.Unlock()
 	or.logger.Info("loaded tracked orders", zap.Int("count", len(or.trackedOrders)))
+	or.tomu.Unlock()
 
 	return nil
 }
@@ -145,7 +145,7 @@ func (or *orderTracker) canFulfillOrder(id, denom string) bool {
 
 	if or.isOrderFulfilled(id) {
 		or.logger.Debug("order already fulfilled", zap.String("id", id))
-		return false
+		// return false
 	}
 
 	if or.isOrderCurrent(id) {
