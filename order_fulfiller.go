@@ -108,11 +108,11 @@ func (ol *orderFulfiller) processBatch(ctx context.Context, batch []*demandOrder
 				return
 			}
 
-			fulfilledOrders := make([]*demandOrder, len(ids))
+			fulfilledOrders := make([]*demandOrder, 0, len(batch))
 
-			for i, order := range batch {
+			for _, order := range batch {
 				if slices.Contains(ids, order.id) {
-					fulfilledOrders[i] = order
+					fulfilledOrders = append(fulfilledOrders, order)
 					rewards = append(rewards, order.amount.String())
 				}
 			}
