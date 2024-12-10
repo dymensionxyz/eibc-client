@@ -121,16 +121,23 @@ func (ol *orderFulfiller) fulfillAuthorizedDemandOrders(demandOrder ...*demandOr
 	fulfillMsgs := make([]sdk.Msg, len(demandOrder))
 
 	for i, order := range demandOrder {
-		fulfillMsgs[i] = types.NewMsgFulfillOrderAuthorized(
+		msg := types.NewMsgFulfillOrderAuthorized(
 			order.id,
 			order.rollappId,
 			order.lpAddress,
 			ol.operatorAddress,
 			order.fee.Amount.String(),
 			order.price,
-			order.operatorFeePart,
+			sdk.IntProto{Int: order.amount},
+			sdk.DecProto{Dec: order.operatorFeePart},
 			order.settlementValidated,
 		)
+
+		if err := msg.ValidateBasic(); err != nil {
+			ol.logger.Error("failed to validate message", zap.Error(err))
+			return fmt.Errorf("failed to validate message: %w", err)
+		}
+		fulfillMsgs[i] = msg
 	}
 
 	// bech32 decode the policy address
