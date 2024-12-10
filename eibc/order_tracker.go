@@ -316,7 +316,7 @@ func (or *orderTracker) filterLPsForOrder(order *demandOrder) ([]*lp, []string) 
 		}
 
 		// check the fee is at least the minimum for what the lp wants
-		minFee := sdk.NewDecFromInt(order.fee.Amount).Mul(rollapp.minFeePercentage).RoundInt()
+		minFee := sdk.NewDecFromInt(order.amount).Mul(rollapp.minFeePercentage).RoundInt()
 
 		if order.fee.Amount.LT(minFee) {
 			lpSkip = append(lpSkip, fmt.Sprintf("%s: min_fee", lp.address))

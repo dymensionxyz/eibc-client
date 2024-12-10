@@ -47,7 +47,7 @@ func newOrderPoller(
 }
 
 const (
-	ordersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: {equalTo: EibcPending}, blockHeight: { greaterThan: \"%s\" }}) {nodes { eibcOrderId amount proofHeight blockHeight price rollappId eibcFee }}}"}`
+	ordersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: { in: [EibcPending, Refunding] }, blockHeight: { greaterThan: \"%s\" }}) {nodes { eibcOrderId amount proofHeight blockHeight price rollappId eibcFee }}}"}`
 )
 
 type Order struct {

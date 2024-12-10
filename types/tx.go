@@ -2,18 +2,15 @@ package types
 
 import (
 	"encoding/hex"
-	"errors"
 	"fmt"
 
 	errorsmod "cosmossdk.io/errors"
-	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
+
+	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
-var (
-	_ = sdk.Msg(&MsgFulfillOrderAuthorized{})
-	_ = sdk.Msg(&MsgFinalizePacketByPacketKey{})
-)
+var _ = sdk.Msg(&MsgFulfillOrderAuthorized{})
 
 func NewMsgFulfillOrderAuthorized(
 	orderId,
@@ -22,7 +19,8 @@ func NewMsgFulfillOrderAuthorized(
 	operatorFeeAddress,
 	expectedFee string,
 	price sdk.Coins,
-	operatorFeePart sdk.Dec,
+	amount sdk.IntProto,
+	fulfillerFeePart sdk.DecProto,
 	settlementValidated bool,
 ) *MsgFulfillOrderAuthorized {
 	return &MsgFulfillOrderAuthorized{
@@ -32,7 +30,8 @@ func NewMsgFulfillOrderAuthorized(
 		OperatorFeeAddress:  operatorFeeAddress,
 		ExpectedFee:         expectedFee,
 		Price:               price,
-		OperatorFeeShare:    sdk.DecProto{Dec: operatorFeePart},
+		Amount:              amount,
+		OperatorFeeShare:    fulfillerFeePart,
 		SettlementValidated: settlementValidated,
 	}
 }
@@ -72,12 +71,16 @@ func (msg *MsgFulfillOrderAuthorized) ValidateBasic() error {
 		return errorsmod.Wrap(sdkerrors.ErrInvalidRequest, err.Error())
 	}
 
-	if msg.Price.IsAnyNegative() {
-		return errorsmod.Wrap(sdkerrors.ErrInvalidRequest, "price cannot be negative")
+	if !msg.Price.IsValid() {
+		return errorsmod.Wrap(sdkerrors.ErrInvalidRequest, "price is invalid")
 	}
 
-	if msg.OperatorFeeShare.Dec.IsNegative() {
-		return errorsmod.Wrap(sdkerrors.ErrInvalidRequest, "operator fee share cannot be negative")
+	if msg.Amount.Int.IsNil() || msg.Amount.Int.IsNegative() {
+		return errorsmod.Wrap(sdkerrors.ErrInvalidRequest, "amount cannot be empty or negative")
+	}
+
+	if msg.OperatorFeeShare.Dec.IsNil() || msg.OperatorFeeShare.Dec.IsNegative() {
+		return errorsmod.Wrap(sdkerrors.ErrInvalidRequest, "operator fee share cannot be empty or negative")
 	}
 
 	if msg.OperatorFeeShare.Dec.GT(sdk.OneDec()) {
@@ -127,28 +130,4 @@ func validateCommon(orderId, fee string, address ...string) error {
 	}
 
 	return nil
-}
-
-func (m MsgFinalizePacketByPacketKey) ValidateBasic() error {
-	_, err := sdk.AccAddressFromBech32(m.Sender)
-	if err != nil {
-		return errors.Join(
-			sdkerrors.ErrInvalidAddress,
-			errorsmod.Wrapf(err, "sender must be a valid bech32 address: %s", m.Sender),
-		)
-	}
-	if len(m.PacketKey) == 0 {
-		return fmt.Errorf("packet key must be non-empty")
-	}
-
-	return nil
-}
-
-func (m MsgFinalizePacketByPacketKey) GetSigners() []sdk.AccAddress {
-	signer, _ := sdk.AccAddressFromBech32(m.Sender)
-	return []sdk.AccAddress{signer}
-}
-
-func (*MsgFinalizePacketByPacketKey) XXX_MessageName() string {
-	return "dymensionxyz.dymension.delayedack.MsgFinalizePacketByPacketKey"
 }
