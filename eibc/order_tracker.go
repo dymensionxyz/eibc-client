@@ -21,6 +21,7 @@ import (
 type orderTracker struct {
 	getBalances    getSpendableBalancesFn
 	getLPGrants    getLPGrantsFn
+	resetPoller    func()
 	fullNodeClient *nodeClient
 	logger         *zap.Logger
 	policyAddress  string
@@ -59,6 +60,7 @@ func newOrderTracker(
 	ordersCh chan<- []*demandOrder,
 	balanceRefreshInterval,
 	validateOrdersInterval time.Duration,
+	resetPoller func(),
 	logger *zap.Logger,
 ) *orderTracker {
 	azc := authz.NewQueryClient(hubClient.Context())
@@ -66,6 +68,7 @@ func newOrderTracker(
 	return &orderTracker{
 		getBalances:            bc.SpendableBalances,
 		getLPGrants:            azc.GranteeGrants,
+		resetPoller:            resetPoller,
 		policyAddress:          policyAddress,
 		minOperatorFeeShare:    minOperatorFeeShare,
 		fullNodeClient:         fullNodeClient,
@@ -253,7 +256,7 @@ func (or *orderTracker) findLPForOrder(order *demandOrder) error {
 		for _, l := range lps {
 			if l.address == order.lpAddress {
 				// in case it changed
-				order.settlementValidated = l.rollapps[order.rollappId].settlementValidated
+				order.settlementValidated = l.Rollapps[order.rollappId].SettlementValidated
 				return nil
 			}
 		}
@@ -270,8 +273,8 @@ func (or *orderTracker) findLPForOrder(order *demandOrder) error {
 	}
 
 	order.lpAddress = bestLP.address
-	order.settlementValidated = bestLP.rollapps[order.rollappId].settlementValidated
-	order.operatorFeePart = bestLP.rollapps[order.rollappId].operatorFeeShare
+	order.settlementValidated = bestLP.Rollapps[order.rollappId].SettlementValidated
+	order.operatorFeePart = bestLP.Rollapps[order.rollappId].OperatorFeeShare
 
 	// optimistically deduct from the LP's balance
 	bestLP.reserveFunds(order.price)
@@ -297,26 +300,26 @@ func (or *orderTracker) filterLPsForOrder(order *demandOrder) ([]*lp, []string) 
 		}
 
 		// check the rollapp is allowed
-		rollapp, ok := lp.rollapps[order.rollappId]
+		rollapp, ok := lp.Rollapps[order.rollappId]
 		if !ok {
 			lpSkip = append(lpSkip, fmt.Sprintf("%s: rollapp", lp.address))
 			continue
 		}
 
 		// check the denom is allowed
-		if len(rollapp.denoms) > 0 && !rollapp.denoms[order.fee.Denom] {
+		if len(rollapp.Denoms) > 0 && !rollapp.Denoms[order.fee.Denom] {
 			lpSkip = append(lpSkip, fmt.Sprintf("%s: denom", lp.address))
 			continue
 		}
 
 		// check the order price does not exceed the max price
-		if rollapp.maxPrice.IsAllPositive() && order.price.IsAnyGT(rollapp.maxPrice) {
+		if rollapp.MaxPrice.IsAllPositive() && order.price.IsAnyGT(rollapp.MaxPrice) {
 			lpSkip = append(lpSkip, fmt.Sprintf("%s: max_price", lp.address))
 			continue
 		}
 
 		// check the fee is at least the minimum for what the lp wants
-		minFee := sdk.NewDecFromInt(order.amount).Mul(rollapp.minFeePercentage).RoundInt()
+		minFee := sdk.NewDecFromInt(order.amount).Mul(rollapp.MinFeePercentage).RoundInt()
 
 		if order.fee.Amount.LT(minFee) {
 			lpSkip = append(lpSkip, fmt.Sprintf("%s: min_fee", lp.address))
@@ -335,11 +338,11 @@ func selectBestLP(lps []*lp, rollappID string) *lp {
 
 	sort.Slice(lps, func(i, j int) bool {
 		// first criterion: settlementValidated (false comes before true)
-		if lps[i].rollapps[rollappID].settlementValidated != lps[j].rollapps[rollappID].settlementValidated {
-			return !lps[i].rollapps[rollappID].settlementValidated && lps[j].rollapps[rollappID].settlementValidated
+		if lps[i].Rollapps[rollappID].SettlementValidated != lps[j].Rollapps[rollappID].SettlementValidated {
+			return !lps[i].Rollapps[rollappID].SettlementValidated && lps[j].Rollapps[rollappID].SettlementValidated
 		}
 		// second criterion: higher operatorFeeShare
-		return lps[i].rollapps[rollappID].operatorFeeShare.GT(lps[j].rollapps[rollappID].operatorFeeShare)
+		return lps[i].Rollapps[rollappID].OperatorFeeShare.GT(lps[j].Rollapps[rollappID].OperatorFeeShare)
 	})
 
 	return lps[0]

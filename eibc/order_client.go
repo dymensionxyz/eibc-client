@@ -41,32 +41,46 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 		return nil, fmt.Errorf("failed to create full node clients: %w", err)
 	}
 
-	// create fulfillers
-	fulfillers := make(map[string]*orderFulfiller)
-
 	minOperatorFeeShare, err := sdk.NewDecFromStr(cfg.Operator.MinFeeShare)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse min operator fee share: %w", err)
 	}
 
-	ordTracker := newOrderTracker(
-		hubClient,
-		cfg.Fulfillers.PolicyAddress,
-		minOperatorFeeShare,
-		fullNodeClient,
-		subscriberID,
-		cfg.Fulfillers.BatchSize,
-		&cfg.Validation,
-		orderCh,
-		cfg.OrderPolling.Interval, // we can use the same interval for order polling and LP balance checking
-		cfg.Validation.Interval,
-		logger,
-	)
+	var poller orderPoller
 
-	eventer := newOrderEventer(
+	oc := &orderClient{
+		config:     cfg,
+		fulfillers: make(map[string]*orderFulfiller),
+		orderTracker: newOrderTracker(
+			hubClient,
+			cfg.Fulfillers.PolicyAddress,
+			minOperatorFeeShare,
+			fullNodeClient,
+			subscriberID,
+			cfg.Fulfillers.BatchSize,
+			&cfg.Validation,
+			orderCh,
+			cfg.OrderPolling.Interval, // we can use the same interval for order polling and LP balance checking
+			cfg.Validation.Interval,
+			poller.resetOrderPolling,
+			logger,
+		),
+		logger: logger,
+	}
+
+	if cfg.OrderPolling.Enabled {
+		oc.orderPoller = newOrderPoller(
+			hubClient.Context().ChainID,
+			oc.orderTracker,
+			cfg.OrderPolling,
+			logger,
+		)
+	}
+
+	oc.orderEventer = newOrderEventer(
 		hubClient,
 		subscriberID,
-		ordTracker,
+		oc.orderTracker,
 		logger,
 	)
 
@@ -142,13 +156,13 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 			cfg.Fulfillers.PolicyAddress,
 			cClient,
 			orderCh,
-			ordTracker.releaseAllReservedOrdersFunds,
-			ordTracker.debitAllReservedOrdersFunds,
+			oc.orderTracker.releaseAllReservedOrdersFunds,
+			oc.orderTracker.debitAllReservedOrdersFunds,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create fulfiller: %w", err)
 		}
-		fulfillers[f.account.Name] = f
+		oc.fulfillers[f.account.Name] = f
 		activeAccs = append(activeAccs, acc)
 	}
 
@@ -169,23 +183,6 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 	err = addFulfillersToGroup(operatorName, operatorAddress.String(), cfg.Operator.GroupID, operatorClient, activeAccs)
 	if err != nil {
 		return nil, err
-	}
-
-	oc := &orderClient{
-		orderEventer: eventer,
-		orderTracker: ordTracker,
-		fulfillers:   fulfillers,
-		config:       cfg,
-		logger:       logger,
-	}
-
-	if cfg.OrderPolling.Enabled {
-		oc.orderPoller = newOrderPoller(
-			hubClient.Context().ChainID,
-			ordTracker,
-			cfg.OrderPolling,
-			logger,
-		)
 	}
 
 	return oc, nil

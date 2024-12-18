@@ -350,6 +350,7 @@ func setupTestOrderClient(
 		orderCh,
 		cfg.OrderPolling.Interval,
 		cfg.Validation.Interval,
+		func() {},
 		logger,
 	)
 	ordTracker.getLPGrants = grantsFn

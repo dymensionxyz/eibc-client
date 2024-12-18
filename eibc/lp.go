@@ -2,6 +2,8 @@ package eibc
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -17,19 +19,21 @@ import (
 
 type lp struct {
 	address       string
-	rollapps      map[string]rollappCriteria
+	Rollapps      map[string]rollappCriteria
 	bmu           sync.Mutex
 	balance       sdk.Coins
 	reservedFunds sdk.Coins
+	hash          string
 }
 
+// note: if spend limit is added, it will change the hash every time it's updated
 type rollappCriteria struct {
-	rollappID           string
-	denoms              map[string]bool
-	maxPrice            sdk.Coins
-	minFeePercentage    sdk.Dec
-	operatorFeeShare    sdk.Dec
-	settlementValidated bool
+	RollappID           string
+	Denoms              map[string]bool
+	MaxPrice            sdk.Coins
+	MinFeePercentage    sdk.Dec
+	OperatorFeeShare    sdk.Dec
+	SettlementValidated bool
 }
 
 func (l *lp) hasBalance(amount sdk.Coins) bool {
@@ -99,6 +103,10 @@ func (or *orderTracker) loadLPs(ctx context.Context) error {
 	or.lpmu.Lock()
 	defer or.lpmu.Unlock()
 
+	var lpsUpdated bool
+
+	currentLPCount := len(or.lps)
+
 	for _, grant := range grants.Grants {
 		if grant.Authorization == nil {
 			continue
@@ -123,11 +131,15 @@ func (or *orderTracker) loadLPs(ctx context.Context) error {
 
 		lp := &lp{
 			address:  grant.Granter,
-			rollapps: make(map[string]rollappCriteria),
+			Rollapps: make(map[string]rollappCriteria),
 			balance:  resp.Balances,
 		}
 
 		for _, rollapp := range g.Rollapps {
+			// check if the rollapp is supported
+			if !or.isRollappSupported(rollapp.RollappId) {
+				continue
+			}
 			// check the operator fee is the minimum for what the operator wants
 			if rollapp.OperatorFeeShare.Dec.LT(or.minOperatorFeeShare) {
 				continue
@@ -137,21 +149,34 @@ func (or *orderTracker) loadLPs(ctx context.Context) error {
 			for _, denom := range rollapp.Denoms {
 				denoms[denom] = true
 			}
-			lp.rollapps[rollapp.RollappId] = rollappCriteria{
-				rollappID:           rollapp.RollappId,
-				denoms:              denoms,
-				maxPrice:            rollapp.MaxPrice,
-				minFeePercentage:    rollapp.MinFeePercentage.Dec,
-				operatorFeeShare:    rollapp.OperatorFeeShare.Dec,
-				settlementValidated: rollapp.SettlementValidated,
+			lp.Rollapps[rollapp.RollappId] = rollappCriteria{
+				RollappID:           rollapp.RollappId,
+				Denoms:              denoms,
+				MaxPrice:            rollapp.MaxPrice,
+				MinFeePercentage:    rollapp.MinFeePercentage.Dec,
+				OperatorFeeShare:    rollapp.OperatorFeeShare.Dec,
+				SettlementValidated: rollapp.SettlementValidated,
 			}
 		}
 
-		if len(lp.rollapps) == 0 {
+		if len(lp.Rollapps) == 0 {
 			continue
 		}
 
+		lp.setHash()
+
+		l, ok := or.lps[grant.Granter]
+		if ok && l.hash != lp.hash {
+			or.logger.Info("LP updated", zap.String("address", grant.Granter))
+			lpsUpdated = true
+		}
+
 		or.lps[grant.Granter] = lp
+	}
+
+	if lpsUpdated || (currentLPCount > 0 && len(or.lps) > currentLPCount) {
+		or.logger.Info("LPs updated, resetting order polling pagination")
+		or.resetPoller()
 	}
 
 	return nil
@@ -202,4 +227,13 @@ func (or *orderTracker) refreshBalances(ctx context.Context) {
 		}
 		lp.setBalance(resp.Balances)
 	}
+}
+
+func (l *lp) setHash() {
+	jsn, err := json.Marshal(l.Rollapps) // only hash the rollapps
+	if err != nil {
+		panic(err)
+	}
+	hash := sha256.Sum256(jsn)
+	l.hash = fmt.Sprintf("%x", hash[:])
 }

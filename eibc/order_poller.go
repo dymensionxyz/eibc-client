@@ -228,3 +228,7 @@ func (p *orderPoller) getDemandOrdersFromIndexer() ([]Order, error) {
 
 	return res.Data.IbcTransferDetails.Nodes, nil
 }
+
+func (p *orderPoller) resetOrderPolling() {
+	p.lastBlockHeight = 0
+}
