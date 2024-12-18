@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -25,7 +26,7 @@ type orderPoller struct {
 
 	getOrders       func() ([]Order, error)
 	orderTracker    *orderTracker
-	lastBlockHeight uint64
+	lastBlockHeight atomic.Uint64
 }
 
 func newOrderPoller(
@@ -101,8 +102,8 @@ func (p *orderPoller) pollPendingDemandOrders() error {
 			p.logger.Error("failed to parse block height", zap.Error(err))
 			continue
 		}
-		if blockHeight > p.lastBlockHeight {
-			p.lastBlockHeight = blockHeight
+		if blockHeight > p.lastBlockHeight.Load() {
+			p.lastBlockHeight.Store(blockHeight)
 		}
 		demandOrders = append(demandOrders, order)
 	}
@@ -209,7 +210,7 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 }
 
 func (p *orderPoller) getDemandOrdersFromIndexer() ([]Order, error) {
-	queryStr := fmt.Sprintf(ordersQuery, p.chainID, fmt.Sprint(p.lastBlockHeight))
+	queryStr := fmt.Sprintf(ordersQuery, p.chainID, fmt.Sprint(p.lastBlockHeight.Load()))
 	body := strings.NewReader(queryStr)
 
 	resp, err := p.indexerClient.Post(p.indexerURL, "application/json", body)
@@ -230,5 +231,5 @@ func (p *orderPoller) getDemandOrdersFromIndexer() ([]Order, error) {
 }
 
 func (p *orderPoller) resetOrderPolling() {
-	p.lastBlockHeight = 0
+	p.lastBlockHeight.Store(0)
 }

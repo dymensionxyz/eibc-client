@@ -46,8 +46,6 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 		return nil, fmt.Errorf("failed to parse min operator fee share: %w", err)
 	}
 
-	var poller orderPoller
-
 	oc := &orderClient{
 		config:     cfg,
 		fulfillers: make(map[string]*orderFulfiller),
@@ -62,7 +60,7 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 			orderCh,
 			cfg.OrderPolling.Interval, // we can use the same interval for order polling and LP balance checking
 			cfg.Validation.Interval,
-			poller.resetOrderPolling,
+			nil, // set below
 			logger,
 		),
 		logger: logger,
@@ -75,6 +73,7 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 			cfg.OrderPolling,
 			logger,
 		)
+		oc.orderTracker.resetPoller = oc.orderPoller.resetOrderPolling
 	}
 
 	oc.orderEventer = newOrderEventer(
