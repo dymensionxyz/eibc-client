@@ -106,6 +106,28 @@ func (or *orderTracker) loadLPs(ctx context.Context) error {
 	var lpsUpdated bool
 
 	currentLPCount := len(or.lps)
+	toDelete := make([]string, 0, len(or.lps))
+
+	for _, lp := range or.lps {
+		found := false
+		for _, grant := range grants.Grants {
+			if grant.Granter == lp.address {
+				found = true
+				if grant.Authorization == nil || grant.Authorization.Value == nil {
+					toDelete = append(toDelete, lp.address)
+				}
+				break
+			}
+		}
+		if !found {
+			toDelete = append(toDelete, lp.address)
+		}
+	}
+
+	for _, address := range toDelete {
+		or.logger.Info("LP revoked authorization", zap.String("address", address))
+		delete(or.lps, address)
+	}
 
 	for _, grant := range grants.Grants {
 		if grant.Authorization == nil {
@@ -166,12 +188,22 @@ func (or *orderTracker) loadLPs(ctx context.Context) error {
 		lp.setHash()
 
 		l, ok := or.lps[grant.Granter]
-		if ok && l.hash != lp.hash {
-			or.logger.Info("LP updated", zap.String("address", grant.Granter))
-			lpsUpdated = true
+		if ok {
+			if l.hash != lp.hash {
+				or.logger.Info("LP updated", zap.String("address", grant.Granter))
+				lpsUpdated = true
+			}
+		} else {
+			or.logger.Info("LP added", zap.String("address", grant.Granter))
 		}
 
 		or.lps[grant.Granter] = lp
+	}
+
+	if len(or.lps) == 0 {
+		or.logger.Info("no LPs found")
+	} else {
+		or.logger.Info("loaded LPs", zap.Int("count", len(or.lps)))
 	}
 
 	if lpsUpdated || (currentLPCount > 0 && len(or.lps) > currentLPCount) {
