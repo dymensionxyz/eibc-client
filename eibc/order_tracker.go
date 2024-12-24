@@ -78,7 +78,7 @@ func newOrderTracker(
 		validation:             validation,
 		validOrdersCh:          make(chan []*demandOrder),
 		outputOrdersCh:         ordersCh,
-		logger:                 logger.With(zap.String("module", "order-resolver")),
+		logger:                 logger.With(zap.String("module", "order-tracker")),
 		subscriberID:           subscriberID,
 		balanceRefreshInterval: balanceRefreshInterval,
 		validateOrdersInterval: validateOrdersInterval,

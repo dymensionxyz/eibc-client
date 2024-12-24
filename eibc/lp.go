@@ -34,6 +34,7 @@ type rollappCriteria struct {
 	MinFeePercentage    sdk.Dec
 	OperatorFeeShare    sdk.Dec
 	SettlementValidated bool
+	spendLimit          sdk.Coins // keep private to exclude from hash, as spendLimit decreases as orders are fulfilled
 }
 
 func (l *lp) hasBalance(amount sdk.Coins) bool {
@@ -131,6 +132,7 @@ func (or *orderTracker) loadLPs(ctx context.Context) error {
 
 	for _, grant := range grants.Grants {
 		if grant.Authorization == nil {
+			or.logger.Error("nil authorization", zap.Any("grant", grant))
 			continue
 		}
 
@@ -157,13 +159,17 @@ func (or *orderTracker) loadLPs(ctx context.Context) error {
 			balance:  resp.Balances,
 		}
 
+		l, existLP := or.lps[grant.Granter]
+
 		for _, rollapp := range g.Rollapps {
 			// check if the rollapp is supported
 			if !or.isRollappSupported(rollapp.RollappId) {
+				or.logger.Debug("unsupported rollapp", zap.String("rollapp", rollapp.RollappId))
 				continue
 			}
 			// check the operator fee is the minimum for what the operator wants
 			if rollapp.OperatorFeeShare.Dec.LT(or.minOperatorFeeShare) {
+				or.logger.Debug("operator fee share too low", zap.String("rollapp", rollapp.RollappId))
 				continue
 			}
 
@@ -175,26 +181,32 @@ func (or *orderTracker) loadLPs(ctx context.Context) error {
 				RollappID:           rollapp.RollappId,
 				Denoms:              denoms,
 				MaxPrice:            rollapp.MaxPrice,
+				spendLimit:          rollapp.SpendLimit,
 				MinFeePercentage:    rollapp.MinFeePercentage.Dec,
 				OperatorFeeShare:    rollapp.OperatorFeeShare.Dec,
 				SettlementValidated: rollapp.SettlementValidated,
 			}
+			if existLP {
+				r, existRA := l.Rollapps[rollapp.RollappId]
+				lpsUpdated = existRA && rollapp.SpendLimit.IsAnyGT(r.spendLimit)
+			}
 		}
 
 		if len(lp.Rollapps) == 0 {
+			or.logger.Debug("no supported rollapps, skipping LP", zap.String("address", grant.Granter))
 			continue
 		}
 
 		lp.setHash()
 
-		l, ok := or.lps[grant.Granter]
-		if ok {
+		if existLP {
 			if l.hash != lp.hash {
 				or.logger.Info("LP updated", zap.String("address", grant.Granter))
 				lpsUpdated = true
 			}
 		} else {
 			or.logger.Info("LP added", zap.String("address", grant.Granter))
+			lpsUpdated = true
 		}
 
 		or.lps[grant.Granter] = lp
