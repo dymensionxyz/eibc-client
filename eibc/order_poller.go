@@ -262,7 +262,4 @@ func (p *orderPoller) getRollappDemandOrdersFromIndexer(ctx context.Context, rol
 
 func (p *orderPoller) resetOrderPolling() {
 	p.lastBlockHeight.Store(0)
-	if err := p.pollPendingDemandOrders(context.Background()); err != nil {
-		p.logger.Error("failed to refresh demand orders", zap.Error(err))
-	}
 }
