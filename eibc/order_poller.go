@@ -234,7 +234,9 @@ func (p *orderPoller) getRollappDemandOrdersFromIndexer(ctx context.Context, rol
 		RollappId: rollappId,
 		Finalized: true,
 	})
-	if err == nil {
+	if err != nil {
+		p.logger.Warn("failed to get latest height, using 0", zap.Error(err))
+	} else {
 		lastFinalizedHeight = fmt.Sprint(lastHeightResp.Height)
 	}
 
