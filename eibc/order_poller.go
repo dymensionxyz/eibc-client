@@ -225,6 +225,9 @@ func (p *orderPoller) getDemandOrdersFromIndexer(ctx context.Context) ([]Order, 
 		}
 		demandOrders = append(demandOrders, orders...)
 	}
+
+	p.logger.Debug("got demand orders", zap.Int("count", len(demandOrders)))
+
 	return demandOrders, nil
 }
 
