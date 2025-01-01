@@ -244,6 +244,9 @@ func (p *orderPoller) getRollappDemandOrdersFromIndexer(ctx context.Context, rol
 	}
 
 	queryStr := fmt.Sprintf(rollappOrdersQuery, p.chainID, fmt.Sprint(p.lastBlockHeight.Load()), rollappId, lastFinalizedHeight)
+
+	p.logger.Debug("querying demand orders", zap.String("query", queryStr))
+
 	body := strings.NewReader(queryStr)
 
 	resp, err := p.indexerClient.Post(p.indexerURL, "application/json", body)
