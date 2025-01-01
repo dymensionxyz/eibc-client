@@ -229,15 +229,16 @@ func (p *orderPoller) getDemandOrdersFromIndexer(ctx context.Context) ([]Order, 
 }
 
 func (p *orderPoller) getRollappDemandOrdersFromIndexer(ctx context.Context, rollappId string) ([]Order, error) {
-	lastFinalizedHeight, err := p.rollappClient.LatestHeight(ctx, &types.QueryGetLatestHeightRequest{
+	var lastFinalizedHeight string
+	lastHeightResp, err := p.rollappClient.LatestHeight(ctx, &types.QueryGetLatestHeightRequest{
 		RollappId: rollappId,
 		Finalized: true,
 	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get latest finalized height for rollapp '%s': %w", rollappId, err)
+	if err == nil {
+		lastFinalizedHeight = fmt.Sprint(lastHeightResp.Height)
 	}
 
-	queryStr := fmt.Sprintf(rollappOrdersQuery, p.chainID, fmt.Sprint(p.lastBlockHeight.Load()), rollappId, fmt.Sprint(lastFinalizedHeight.Height))
+	queryStr := fmt.Sprintf(rollappOrdersQuery, p.chainID, fmt.Sprint(p.lastBlockHeight.Load()), rollappId, lastFinalizedHeight)
 	body := strings.NewReader(queryStr)
 
 	resp, err := p.indexerClient.Post(p.indexerURL, "application/json", body)
@@ -259,4 +260,7 @@ func (p *orderPoller) getRollappDemandOrdersFromIndexer(ctx context.Context, rol
 
 func (p *orderPoller) resetOrderPolling() {
 	p.lastBlockHeight.Store(0)
+	if err := p.pollPendingDemandOrders(context.Background()); err != nil {
+		p.logger.Error("failed to refresh demand orders", zap.Error(err))
+	}
 }
