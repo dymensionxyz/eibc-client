@@ -231,9 +231,10 @@ func (p *orderPoller) getDemandOrdersFromIndexer(ctx context.Context) ([]Order, 
 func (p *orderPoller) getRollappDemandOrdersFromIndexer(ctx context.Context, rollappId string) ([]Order, error) {
 	lastFinalizedHeight, err := p.rollappClient.LatestHeight(ctx, &types.QueryGetLatestHeightRequest{
 		RollappId: rollappId,
+		Finalized: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get latest finalized height: %w", err)
+		return nil, fmt.Errorf("failed to get latest finalized height for rollapp '%s': %w", rollappId, err)
 	}
 
 	queryStr := fmt.Sprintf(rollappOrdersQuery, p.chainID, fmt.Sprint(p.lastBlockHeight.Load()), rollappId, fmt.Sprint(lastFinalizedHeight.Height))
