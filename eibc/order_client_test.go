@@ -322,7 +322,7 @@ func TestOrderClient(t *testing.T) {
 
 func setupTestOrderClient(
 	cfg config.Config,
-	pollOrders func() ([]Order, error),
+	pollOrders func(ctx context.Context) ([]Order, error),
 	hubClient mockNodeClient,
 	fullNodeClient *nodeClient,
 	grantsFn getLPGrantsFn,
@@ -373,8 +373,6 @@ func setupTestOrderClient(
 		logger,
 	)
 
-	chainID := "test-chain-id"
-
 	for i := range cfg.Fulfillers.Scale {
 		fulfillerName := fmt.Sprintf("fulfiller-%d", i+1)
 
@@ -403,10 +401,15 @@ func setupTestOrderClient(
 	// poller
 	var poller *orderPoller
 	if cfg.OrderPolling.Enabled {
+		var rollapps []string
+		for r, _ := range cfg.Rollapps {
+			rollapps = append(rollapps, r)
+		}
 		poller = newOrderPoller(
-			chainID,
+			hubClient.Context(),
 			ordTracker,
 			cfg.OrderPolling,
+			rollapps,
 			logger,
 		)
 		poller.getOrders = pollOrders
@@ -425,8 +428,8 @@ func setupTestOrderClient(
 	return oc, nil
 }
 
-func mockGetPollerOrders(orders []Order) func() ([]Order, error) {
-	return func() ([]Order, error) {
+func mockGetPollerOrders(orders []Order) func(ctx context.Context) ([]Order, error) {
+	return func(ctx context.Context) ([]Order, error) {
 		// after polling once, remove orders
 		defer func() {
 			orders = nil

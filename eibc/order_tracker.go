@@ -352,11 +352,3 @@ func (or *orderTracker) isRollappSupported(rollappID string) bool {
 	_, ok := or.fullNodeClient.rollapps[rollappID]
 	return ok
 }
-
-func (or *orderTracker) isOrderFulfilled(id string) bool {
-	or.fomu.Lock()
-	defer or.fomu.Unlock()
-
-	_, ok := or.fulfilledOrders[id]
-	return ok
-}
