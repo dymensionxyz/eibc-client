@@ -232,7 +232,7 @@ func (p *orderPoller) getDemandOrdersFromIndexer(ctx context.Context) ([]Order, 
 }
 
 func (p *orderPoller) getRollappDemandOrdersFromIndexer(ctx context.Context, rollappId string) ([]Order, error) {
-	var lastFinalizedHeight string
+	lastFinalizedHeight := "0"
 	lastHeightResp, err := p.rollappClient.LatestHeight(ctx, &types.QueryGetLatestHeightRequest{
 		RollappId: rollappId,
 		Finalized: true,
@@ -244,9 +244,6 @@ func (p *orderPoller) getRollappDemandOrdersFromIndexer(ctx context.Context, rol
 	}
 
 	queryStr := fmt.Sprintf(rollappOrdersQuery, p.chainID, fmt.Sprint(p.lastBlockHeight.Load()), rollappId, lastFinalizedHeight)
-
-	p.logger.Debug("querying demand orders", zap.String("query", queryStr))
-
 	body := strings.NewReader(queryStr)
 
 	resp, err := p.indexerClient.Post(p.indexerURL, "application/json", body)
