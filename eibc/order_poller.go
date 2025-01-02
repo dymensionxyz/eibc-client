@@ -11,36 +11,43 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cosmos/cosmos-sdk/client"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"go.uber.org/zap"
 
 	"github.com/dymensionxyz/eibc-client/config"
+	"github.com/dymensionxyz/eibc-client/types"
 )
 
 type orderPoller struct {
 	chainID       string
 	indexerURL    string
+	rollapps      []string
 	interval      time.Duration
 	indexerClient *http.Client
+	rollappClient types.QueryClient
 	logger        *zap.Logger
 
-	getOrders       func() ([]Order, error)
+	getOrders       func(ctx context.Context) ([]Order, error)
 	orderTracker    *orderTracker
 	lastBlockHeight atomic.Uint64
 }
 
 func newOrderPoller(
-	chainID string,
+	clientCtx client.Context,
 	orderTracker *orderTracker,
 	pollingCfg config.OrderPollingConfig,
+	rollapps []string,
 	logger *zap.Logger,
 ) *orderPoller {
 	o := &orderPoller{
-		chainID:       chainID,
+		chainID:       clientCtx.ChainID,
+		rollapps:      rollapps,
 		indexerURL:    pollingCfg.IndexerURL,
 		interval:      pollingCfg.Interval,
 		logger:        logger.With(zap.String("module", "order-poller")),
 		orderTracker:  orderTracker,
+		rollappClient: types.NewQueryClient(clientCtx),
 		indexerClient: &http.Client{Timeout: 25 * time.Second},
 	}
 	o.getOrders = o.getDemandOrdersFromIndexer
@@ -48,7 +55,7 @@ func newOrderPoller(
 }
 
 const (
-	ordersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: { in: [EibcPending, Refunding] }, blockHeight: { greaterThan: \"%s\" }}) {nodes { eibcOrderId amount proofHeight blockHeight price rollappId eibcFee }}}"}`
+	rollappOrdersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: { in: [EibcPending, Refunding] }, blockHeight: { greaterThan: \"%s\" }, rollappId: { equalTo: \"%s\"}, proofHeight: {greaterThan: \"%s\"}}) {nodes { eibcOrderId amount proofHeight blockHeight price rollappId eibcFee }}}"}`
 )
 
 type Order struct {
@@ -70,7 +77,7 @@ type ordersResponse struct {
 }
 
 func (p *orderPoller) start(ctx context.Context) error {
-	if err := p.pollPendingDemandOrders(); err != nil {
+	if err := p.pollPendingDemandOrders(ctx); err != nil {
 		return fmt.Errorf("failed to refresh demand orders: %w", err)
 	}
 
@@ -80,7 +87,7 @@ func (p *orderPoller) start(ctx context.Context) error {
 			case <-ctx.Done():
 				return
 			default:
-				if err := p.pollPendingDemandOrders(); err != nil {
+				if err := p.pollPendingDemandOrders(ctx); err != nil {
 					p.logger.Error("failed to refresh demand orders", zap.Error(err))
 				}
 			}
@@ -89,8 +96,8 @@ func (p *orderPoller) start(ctx context.Context) error {
 	return nil
 }
 
-func (p *orderPoller) pollPendingDemandOrders() error {
-	newDemandOrders, err := p.getOrders()
+func (p *orderPoller) pollPendingDemandOrders(ctx context.Context) error {
+	newDemandOrders, err := p.getOrders(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get demand orders: %w", err)
 	}
@@ -209,8 +216,34 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 	return orders
 }
 
-func (p *orderPoller) getDemandOrdersFromIndexer() ([]Order, error) {
-	queryStr := fmt.Sprintf(ordersQuery, p.chainID, fmt.Sprint(p.lastBlockHeight.Load()))
+func (p *orderPoller) getDemandOrdersFromIndexer(ctx context.Context) ([]Order, error) {
+	var demandOrders []Order
+	for _, rollapp := range p.rollapps {
+		orders, err := p.getRollappDemandOrdersFromIndexer(ctx, rollapp)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get demand orders: %w", err)
+		}
+		demandOrders = append(demandOrders, orders...)
+	}
+
+	p.logger.Debug("got demand orders", zap.Int("count", len(demandOrders)))
+
+	return demandOrders, nil
+}
+
+func (p *orderPoller) getRollappDemandOrdersFromIndexer(ctx context.Context, rollappId string) ([]Order, error) {
+	lastFinalizedHeight := "0"
+	lastHeightResp, err := p.rollappClient.LatestHeight(ctx, &types.QueryGetLatestHeightRequest{
+		RollappId: rollappId,
+		Finalized: true,
+	})
+	if err != nil {
+		p.logger.Warn("failed to get latest height, using 0", zap.Error(err))
+	} else {
+		lastFinalizedHeight = fmt.Sprint(lastHeightResp.Height)
+	}
+
+	queryStr := fmt.Sprintf(rollappOrdersQuery, p.chainID, fmt.Sprint(p.lastBlockHeight.Load()), rollappId, lastFinalizedHeight)
 	body := strings.NewReader(queryStr)
 
 	resp, err := p.indexerClient.Post(p.indexerURL, "application/json", body)

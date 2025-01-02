@@ -67,10 +67,15 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 	}
 
 	if cfg.OrderPolling.Enabled {
+		var rollapps []string
+		for r, _ := range cfg.Rollapps {
+			rollapps = append(rollapps, r)
+		}
 		oc.orderPoller = newOrderPoller(
-			hubClient.Context().ChainID,
+			hubClient.Context(),
 			oc.orderTracker,
 			cfg.OrderPolling,
+			rollapps,
 			logger,
 		)
 		oc.orderTracker.resetPoller = oc.orderPoller.resetOrderPolling
