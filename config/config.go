@@ -133,10 +133,6 @@ func InitConfig() {
 	viper.SetDefault("rollapps.example_1234-1.full_nodes", []string{"http://localhost:26657"})
 	viper.SetDefault("rollapps.example_1234-1.min_confirmations", "1")
 
-	viper.SetDefault("slack.enabled", false)
-	viper.SetDefault("slack.app_token", "<your-slack-app-token>")
-	viper.SetDefault("slack.channel_id", "<your-slack-channel-id>")
-
 	viper.SetConfigType("yaml")
 	if CfgFile != "" {
 		// Use config file from the flag.

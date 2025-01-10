@@ -293,12 +293,6 @@ func (or *orderTracker) filterLPsForOrder(order *demandOrder) ([]*lp, []string) 
 	lpSkip := make([]string, 0, len(or.lps))
 
 	for _, lp := range or.lps {
-		amount := order.price
-		if !lp.hasBalance(amount) {
-			lpSkip = append(lpSkip, fmt.Sprintf("%s: balance", lp.address))
-			continue
-		}
-
 		// check the rollapp is allowed
 		rollapp, ok := lp.Rollapps[order.rollappId]
 		if !ok {
@@ -318,11 +312,17 @@ func (or *orderTracker) filterLPsForOrder(order *demandOrder) ([]*lp, []string) 
 			continue
 		}
 
-		// check the fee is at least the minimum for what the lp wants
+		// check the fee is at least the minimum of what the lp wants
 		minFee := sdk.NewDecFromInt(order.amount).Mul(rollapp.MinFeePercentage).RoundInt()
 
 		if order.fee.Amount.LT(minFee) {
 			lpSkip = append(lpSkip, fmt.Sprintf("%s: min_fee", lp.address))
+			continue
+		}
+
+		amount := order.price
+		if !lp.hasBalance(amount) {
+			lpSkip = append(lpSkip, fmt.Sprintf("%s: balance", lp.address))
 			continue
 		}
 

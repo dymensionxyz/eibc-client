@@ -55,7 +55,7 @@ func newOrderPoller(
 }
 
 const (
-	rollappOrdersQuery = `{"query": "{ibcTransferDetails(filter: {network: {equalTo: \"%s\"} status: { in: [EibcPending, Refunding] }, blockHeight: { greaterThan: \"%s\" }, rollappId: { equalTo: \"%s\"}, proofHeight: {greaterThan: \"%s\"}}) {nodes { eibcOrderId amount proofHeight blockHeight price rollappId eibcFee }}}"}`
+	rollappOrdersQuery = `{"query": "{ibcTransferDetails(orderBy: TIME_ASC filter: {network: {equalTo: \"%s\"} status: { in: [EibcPending, Refunding] }, blockHeight: { greaterThan: \"%s\" }, rollappId: { equalTo: \"%s\"}, proofHeight: {greaterThan: \"%s\"}}) {nodes { eibcOrderId amount proofHeight blockHeight price rollappId eibcFee }}}"}`
 )
 
 type Order struct {
@@ -226,7 +226,9 @@ func (p *orderPoller) getDemandOrdersFromIndexer(ctx context.Context) ([]Order, 
 		demandOrders = append(demandOrders, orders...)
 	}
 
-	p.logger.Debug("got demand orders", zap.Int("count", len(demandOrders)))
+	if len(demandOrders) > 0 {
+		p.logger.Debug("got demand orders", zap.Int("count", len(demandOrders)))
+	}
 
 	return demandOrders, nil
 }
@@ -237,9 +239,7 @@ func (p *orderPoller) getRollappDemandOrdersFromIndexer(ctx context.Context, rol
 		RollappId: rollappId,
 		Finalized: true,
 	})
-	if err != nil {
-		p.logger.Warn("failed to get latest height, using 0", zap.Error(err))
-	} else {
+	if err == nil {
 		lastFinalizedHeight = fmt.Sprint(lastHeightResp.Height)
 	}
 
