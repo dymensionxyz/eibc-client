@@ -13,20 +13,23 @@ import (
 
 	"github.com/cosmos/cosmos-sdk/client"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/cosmos/cosmos-sdk/types/query"
 	"go.uber.org/zap"
 
 	"github.com/dymensionxyz/eibc-client/config"
 	"github.com/dymensionxyz/eibc-client/types"
+	eibc "github.com/dymensionxyz/eibc-client/types/eibc"
 )
 
 type orderPoller struct {
-	chainID       string
-	indexerURL    string
-	rollapps      []string
-	interval      time.Duration
-	indexerClient *http.Client
-	rollappClient types.QueryClient
-	logger        *zap.Logger
+	chainID         string
+	indexerURL      string
+	rollapps        []string
+	interval        time.Duration
+	indexerClient   *http.Client
+	rollappClient   types.QueryClient
+	eibcOrderClient eibc.QueryClient
+	logger          *zap.Logger
 
 	getOrders       func(ctx context.Context) ([]Order, error)
 	orderTracker    *orderTracker
@@ -41,16 +44,17 @@ func newOrderPoller(
 	logger *zap.Logger,
 ) *orderPoller {
 	o := &orderPoller{
-		chainID:       clientCtx.ChainID,
-		rollapps:      rollapps,
-		indexerURL:    pollingCfg.IndexerURL,
-		interval:      pollingCfg.Interval,
-		logger:        logger.With(zap.String("module", "order-poller")),
-		orderTracker:  orderTracker,
-		rollappClient: types.NewQueryClient(clientCtx),
-		indexerClient: &http.Client{Timeout: 25 * time.Second},
+		chainID:         clientCtx.ChainID,
+		rollapps:        rollapps,
+		indexerURL:      pollingCfg.IndexerURL,
+		interval:        pollingCfg.Interval,
+		logger:          logger.With(zap.String("module", "order-poller")),
+		orderTracker:    orderTracker,
+		rollappClient:   types.NewQueryClient(clientCtx),
+		eibcOrderClient: eibc.NewQueryClient(clientCtx),
+		indexerClient:   &http.Client{Timeout: 25 * time.Second},
 	}
-	o.getOrders = o.getDemandOrdersFromIndexer
+	o.getOrders = o.getDemandOrdersFromRPC
 	return o
 }
 
@@ -121,15 +125,15 @@ func (p *orderPoller) pollPendingDemandOrders(ctx context.Context) error {
 		return nil
 	}
 
-	if p.logger.Level() <= zap.DebugLevel {
-		ids := make([]string, 0, len(newOrders))
-		for _, order := range newOrders {
-			ids = append(ids, order.id)
-		}
-		p.logger.Debug("new demand orders", zap.Strings("ids", ids))
-	} else {
-		p.logger.Info("new demand orders", zap.Int("count", len(newOrders)))
-	}
+	// if p.logger.Level() <= zap.DebugLevel {
+	//	ids := make([]string, 0, len(newOrders))
+	//	for _, order := range newOrders {
+	//		ids = append(ids, order.id)
+	//	}
+	//	p.logger.Debug("new demand orders", zap.Strings("ids", ids))
+	// } else {
+	p.logger.Info("new demand orders", zap.Int("count", len(newOrders)))
+	// }
 
 	p.orderTracker.trackOrders(newOrders...)
 
@@ -231,6 +235,71 @@ func (p *orderPoller) getDemandOrdersFromIndexer(ctx context.Context) ([]Order, 
 	}
 
 	return demandOrders, nil
+}
+
+func (p *orderPoller) getDemandOrdersFromRPC(ctx context.Context) ([]Order, error) {
+	var demandOrders []Order
+	for _, rollapp := range p.rollapps {
+		orders, err := p.getRollappDemandOrdersFromRPC(ctx, rollapp, eibc.RollappPacket_ON_RECV)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get demand orders: %w", err)
+		}
+		demandOrders = append(demandOrders, orders...)
+
+		orders, err = p.getRollappDemandOrdersFromRPC(ctx, rollapp, eibc.RollappPacket_ON_TIMEOUT)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get demand orders: %w", err)
+		}
+		demandOrders = append(demandOrders, orders...)
+
+		orders, err = p.getRollappDemandOrdersFromRPC(ctx, rollapp, eibc.RollappPacket_ON_ACK)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get demand orders: %w", err)
+		}
+		demandOrders = append(demandOrders, orders...)
+	}
+
+	if len(demandOrders) > 0 {
+		p.logger.Debug("got demand orders", zap.Int("count", len(demandOrders)))
+	}
+
+	return demandOrders, nil
+}
+
+func (p *orderPoller) getRollappDemandOrdersFromRPC(ctx context.Context, rollappId string, typ eibc.RollappPacket_Type) ([]Order, error) {
+	resp, err := p.eibcOrderClient.DemandOrdersByStatus(ctx, &eibc.QueryDemandOrdersByStatusRequest{
+		Status:           eibc.Status_PENDING,
+		Type:             typ,
+		RollappId:        rollappId,
+		FulfillmentState: eibc.FulfillmentState_UNFULFILLED,
+		Pagination: &query.PageRequest{
+			Limit: 100000,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get demand orders: %w", err)
+	}
+
+	var orders []Order
+	for _, order := range resp.DemandOrders {
+		if order.FulfillerAddress != "" {
+			continue
+		}
+		if order.Fee == nil || order.Fee.IsAnyNil() {
+			continue
+		}
+		orders = append(orders, Order{
+			EibcOrderId: order.Id,
+			Amount:      order.Price[0].Amount.String(),
+			Price:       order.Price[0].Amount.Add(order.Fee[0].Amount).String(),
+			Fee:         order.Fee[0].String(),
+			RollappId:   order.RollappId,
+			ProofHeight: fmt.Sprint(order.CreationHeight),
+			BlockHeight: "0",
+		})
+	}
+
+	return orders, nil
 }
 
 func (p *orderPoller) getRollappDemandOrdersFromIndexer(ctx context.Context, rollappId string) ([]Order, error) {
