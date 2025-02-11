@@ -312,6 +312,11 @@ func (or *orderTracker) filterLPsForOrder(order *demandOrder) ([]*lp, []string) 
 			continue
 		}
 
+		if !rollapp.spendLimit.IsAllGTE(order.price) {
+			lpSkip = append(lpSkip, fmt.Sprintf("%s: spend_limit", lp.address))
+			continue
+		}
+
 		// check the fee is at least the minimum of what the lp wants
 		minFee := sdk.NewDecFromInt(order.amount).Mul(rollapp.MinFeePercentage).RoundInt()
 
@@ -320,8 +325,7 @@ func (or *orderTracker) filterLPsForOrder(order *demandOrder) ([]*lp, []string) 
 			continue
 		}
 
-		amount := order.price
-		if !lp.hasBalance(amount) {
+		if !lp.hasBalance(order.price) {
 			lpSkip = append(lpSkip, fmt.Sprintf("%s: balance", lp.address))
 			continue
 		}

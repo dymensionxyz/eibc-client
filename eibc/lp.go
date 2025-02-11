@@ -188,7 +188,9 @@ func (or *orderTracker) loadLPs(ctx context.Context) error {
 			}
 			if existLP {
 				r, existRA := l.Rollapps[rollapp.RollappId]
-				lpsUpdated = existRA && rollapp.SpendLimit.IsAnyGT(r.spendLimit)
+				if existRA && rollapp.SpendLimit.IsAnyGT(r.spendLimit) {
+					lpsUpdated = true
+				}
 			}
 		}
 
