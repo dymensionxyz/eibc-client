@@ -268,7 +268,7 @@ func (or *orderTracker) findLPForOrder(order *demandOrder) error {
 		for _, m := range lpMiss {
 			or.logger.Debug("LP skipped", zap.String("reason", m))
 		}
-		return fmt.Errorf("no LPs found for order: %s", order.id)
+		return fmt.Errorf("no LPs found for order")
 	}
 
 	if order.lpAddress != "" {

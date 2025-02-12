@@ -298,11 +298,16 @@ func (p *orderPoller) getRollappDemandOrdersFromRPC(ctx context.Context, rollapp
 			continue
 		}
 
-		proofHeightEndian := strings.Split(order.TrackingPacketKey, "/")[2]
-		proofHeight := sdk.BigEndianToUint64([]byte(proofHeightEndian))
+		var proofHeight uint64
 
-		if proofHeight <= lastFinalizedHeight {
-			continue
+		proofHeightEndian := strings.Split(order.TrackingPacketKey, "/")[2]
+		if len(proofHeightEndian) == 8 {
+			proofHeight = sdk.BigEndianToUint64([]byte(proofHeightEndian))
+			if proofHeight <= lastFinalizedHeight {
+				continue
+			}
+		} else {
+			fmt.Println("wtf?")
 		}
 
 		orders = append(orders, Order{

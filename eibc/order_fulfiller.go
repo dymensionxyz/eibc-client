@@ -213,8 +213,6 @@ func (ol *orderFulfiller) fulfillAuthorizedDemandOrders(demandOrder ...*demandOr
 		}
 	}
 
-	ol.logger.Info("tx executed", zap.String("tx-hash", rsp.TxHash))
-
 	return nil
 }
 
