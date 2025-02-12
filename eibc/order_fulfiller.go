@@ -124,7 +124,7 @@ func (ol *orderFulfiller) processBatch(orders []*demandOrder) error {
 		return true
 	})
 
-	ol.logger.Info("orders fulfilled", zap.Strings("ids", idsDone), zap.Strings("failed", idsFail), zap.Strings("lps", lpsDone))
+	ol.logger.Info("orders processed", zap.Strings("ids", idsDone), zap.Strings("failed", idsFail), zap.Strings("lps", lpsDone))
 	ol.processedCh <- orders
 
 	return nil

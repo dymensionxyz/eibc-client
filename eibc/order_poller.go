@@ -144,10 +144,6 @@ func (p *orderPoller) pollPendingDemandOrders(ctx context.Context) error {
 
 func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder) {
 	for _, order := range demandOrders {
-		if _, ok := p.noLPOrders[order.EibcOrderId]; ok {
-			continue
-		}
-
 		if order.Fee == "" {
 			continue
 		}
@@ -266,11 +262,19 @@ func (p *orderPoller) getDemandOrdersFromRPC(ctx context.Context) ([]Order, erro
 		demandOrders = append(demandOrders, orders...)
 	}
 
-	if len(demandOrders) > 0 {
-		p.logger.Debug("got demand orders", zap.Int("count", len(demandOrders)))
+	var orders []Order
+	for _, order := range demandOrders {
+		if _, ok := p.noLPOrders[order.EibcOrderId]; ok {
+			continue
+		}
+		orders = append(orders, order)
 	}
 
-	return demandOrders, nil
+	if len(orders) > 0 {
+		p.logger.Debug("got demand orders", zap.Int("count", len(orders)))
+	}
+
+	return orders, nil
 }
 
 func (p *orderPoller) getRollappDemandOrdersFromRPC(ctx context.Context, rollappId string, typ eibc.RollappPacket_Type) ([]Order, error) {
@@ -308,13 +312,18 @@ func (p *orderPoller) getRollappDemandOrdersFromRPC(ctx context.Context, rollapp
 		var proofHeight uint64
 
 		proofHeightEndian := strings.Split(order.TrackingPacketKey, "/")[2]
-		if len(proofHeightEndian) == 8 {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					p.logger.Error("failed to parse proof height", zap.String("proof_height", proofHeightEndian))
+				}
+			}()
+
 			proofHeight = sdk.BigEndianToUint64([]byte(proofHeightEndian))
-			if proofHeight <= lastFinalizedHeight {
-				continue
-			}
-		} else {
-			fmt.Println("wtf?")
+		}()
+
+		if proofHeight <= lastFinalizedHeight {
+			continue
 		}
 
 		orders = append(orders, Order{
