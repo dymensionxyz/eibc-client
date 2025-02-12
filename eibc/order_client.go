@@ -30,6 +30,7 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 	//nolint:gosec
 	subscriberID := fmt.Sprintf("eibc-client-%d", rand.Int())
 	orderCh := make(chan []*demandOrder, config.NewOrderBufferSize)
+	processedCh := make(chan []*demandOrder, config.NewOrderBufferSize)
 
 	hubClient, err := getHubClient(cfg)
 	if err != nil {
@@ -59,6 +60,7 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 			cfg.Fulfillers.MaxOrdersPerTx,
 			&cfg.Validation,
 			orderCh,
+			processedCh,
 			cfg.OrderPolling.Interval, // we can use the same interval for order polling and LP balance checking
 			cfg.Validation.Interval,
 			nil, // set below
@@ -161,6 +163,7 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 			cfg.Fulfillers.PolicyAddress,
 			cClient,
 			orderCh,
+			processedCh,
 			oc.orderTracker.releaseAllReservedOrdersFunds,
 			oc.orderTracker.debitAllReservedOrdersFunds,
 			cfg.Fulfillers.MaxOrdersPerTx,

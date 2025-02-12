@@ -31,6 +31,7 @@ type orderTracker struct {
 	fulfilledOrders     map[string]*demandOrder
 	validOrdersCh       chan []*demandOrder
 	outputOrdersCh      chan<- []*demandOrder
+	processedOrdersCh   chan []*demandOrder
 	lps                 map[string]*lp
 	minOperatorFeeShare sdk.Dec
 
@@ -59,6 +60,7 @@ func newOrderTracker(
 	maxOrdersPerTx int,
 	validation *config.ValidationConfig,
 	ordersCh chan<- []*demandOrder,
+	processedOrdersCh chan []*demandOrder,
 	balanceRefreshInterval,
 	validateOrdersInterval time.Duration,
 	resetPoller func(),
@@ -80,6 +82,7 @@ func newOrderTracker(
 		validation:             validation,
 		validOrdersCh:          make(chan []*demandOrder),
 		outputOrdersCh:         ordersCh,
+		processedOrdersCh:      processedOrdersCh,
 		logger:                 logger.With(zap.String("module", "order-tracker")),
 		subscriberID:           subscriberID,
 		balanceRefreshInterval: balanceRefreshInterval,
@@ -97,6 +100,7 @@ func (or *orderTracker) start(ctx context.Context) error {
 	go or.balanceRefresher(ctx)
 	go or.orderValidator(ctx)
 	go or.enqueueValidOrders(ctx)
+	go or.manageProcessed()
 
 	return nil
 }
@@ -152,6 +156,17 @@ func (or *orderTracker) checkOrders() {
 	// }
 }
 
+func (or *orderTracker) manageProcessed() {
+	for {
+		select {
+		case orders := <-or.processedOrdersCh:
+			for _, order := range orders {
+				or.pool.removeOrder(order.id)
+			}
+		}
+	}
+}
+
 func (or *orderTracker) enqueueValidOrders(ctx context.Context) {
 	for {
 		select {
@@ -185,7 +200,7 @@ func (or *orderTracker) getValidAndRetryOrders(ctx context.Context, orders []*de
 			continue
 		}
 		if valid {
-			or.pool.removeOrder(order.id)
+			or.pool.setValid(order.id)
 			validOrders = append(validOrders, order)
 			continue
 		}

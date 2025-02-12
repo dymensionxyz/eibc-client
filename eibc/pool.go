@@ -35,8 +35,8 @@ func (op *orderPool) upsertOrder(order ...*demandOrder) {
 	defer op.opmu.Unlock()
 
 	for _, o := range order {
-		// skip if order is already in the pool and is being checked
-		if ord, ok := op.orders[o.id]; ok && ord.checking {
+		// skip if order is already in the pool and is being checked or sent to fulfill
+		if ord, ok := op.orders[o.id]; ok && (ord.checking || ord.valid) {
 			continue
 		}
 		op.orders[o.id] = o
@@ -50,13 +50,22 @@ func (op *orderPool) removeOrder(id string) {
 	delete(op.orders, id)
 }
 
+func (op *orderPool) setValid(id string) {
+	op.opmu.Lock()
+	defer op.opmu.Unlock()
+
+	if order, ok := op.orders[id]; ok {
+		order.valid = true
+	}
+}
+
 func (op *orderPool) popOrders(limit int) []*demandOrder {
 	op.opmu.Lock()
 	defer op.opmu.Unlock()
 
 	var orders []*demandOrder
 	for _, order := range op.orders {
-		if order.checking {
+		if order.checking || order.valid {
 			continue
 		}
 		orders = append(orders, order)

@@ -19,7 +19,7 @@ type demandOrder struct {
 	operatorFeePart     sdk.Dec
 	lpAddress           string
 	from                string
-	checking            bool
+	checking, valid     bool
 }
 
 type account struct {
