@@ -305,7 +305,7 @@ func (p *orderPoller) getRollappDemandOrdersFromRPC(ctx context.Context, rollapp
 		if order.FulfillerAddress != "" {
 			continue
 		}
-		if order.Fee == nil || order.Fee.IsAnyNil() {
+		if order.Fee == nil || order.Fee.IsAnyNil() || !order.Fee.IsAllPositive() {
 			continue
 		}
 

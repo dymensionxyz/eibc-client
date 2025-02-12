@@ -137,6 +137,7 @@ func (or *orderTracker) checkOrders() {
 		return
 	}
 
+	// sort orders by proof height descending
 	slices.SortFunc(orders, func(o1, o2 *demandOrder) int {
 		if o1.proofHeight < o2.proofHeight {
 			return 1
