@@ -249,11 +249,11 @@ func (oc *orderClient) Start(ctx context.Context) error {
 
 	// start fulfillers
 	for _, b := range oc.fulfillers {
-		go func() {
+		go func(b *orderFulfiller) {
 			if err := b.start(ctx); err != nil {
 				oc.logger.Error("failed to start fulfiller", zap.Error(err))
 			}
-		}()
+		}(b)
 	}
 
 	<-make(chan bool)

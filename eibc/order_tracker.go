@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -248,7 +247,10 @@ func (or *orderTracker) findLPForOrder(order *demandOrder) error {
 
 	lps, lpMiss := or.filterLPsForOrder(order)
 	if len(lps) == 0 {
-		return fmt.Errorf("no LPs found for order: %s", strings.Join(lpMiss, "; "))
+		for _, m := range lpMiss {
+			or.logger.Debug("LP skipped", zap.String("reason", m))
+		}
+		return fmt.Errorf("no LPs found for order: %s", order.id)
 	}
 
 	if order.lpAddress != "" {
@@ -296,37 +298,37 @@ func (or *orderTracker) filterLPsForOrder(order *demandOrder) ([]*lp, []string) 
 		// check the rollapp is allowed
 		rollapp, ok := lp.Rollapps[order.rollappId]
 		if !ok {
-			lpSkip = append(lpSkip, fmt.Sprintf("%s: rollapp", lp.address))
+			lpSkip = append(lpSkip, fmt.Sprintf("lp: %s; rollapp: %s", lp.address, order.rollappId))
 			continue
 		}
 
 		// check the denom is allowed
 		if len(rollapp.Denoms) > 0 && !rollapp.Denoms[order.fee.Denom] {
-			lpSkip = append(lpSkip, fmt.Sprintf("%s: denom", lp.address))
+			lpSkip = append(lpSkip, fmt.Sprintf("lp: %s; rollapp: %s; denom: %s", lp.address, order.rollappId, order.fee.Denom))
 			continue
 		}
 
 		// check the order price does not exceed the max price
 		if rollapp.MaxPrice.IsAllPositive() && order.price.IsAnyGT(rollapp.MaxPrice) {
-			lpSkip = append(lpSkip, fmt.Sprintf("%s: max_price", lp.address))
+			lpSkip = append(lpSkip, fmt.Sprintf("lp: %s; rollapp: %s: max_price: %s", lp.address, order.rollappId, rollapp.MaxPrice.String()))
 			continue
 		}
 
 		if !rollapp.spendLimit.IsAllGTE(order.price) {
-			lpSkip = append(lpSkip, fmt.Sprintf("%s: spend_limit", lp.address))
+			lpSkip = append(lpSkip, fmt.Sprintf("lp: %s; rollapp: %s: spend_limit: %s", lp.address, order.rollappId, rollapp.spendLimit.String()))
 			continue
 		}
 
 		// check the fee is at least the minimum of what the lp wants
-		minFee := sdk.NewDecFromInt(order.amount).Mul(rollapp.MinFeePercentage).RoundInt()
+		minFee := sdk.NewDecFromInt(order.amount).Mul(rollapp.MinFeePercentage).TruncateInt()
 
 		if order.fee.Amount.LT(minFee) {
-			lpSkip = append(lpSkip, fmt.Sprintf("%s: min_fee", lp.address))
+			lpSkip = append(lpSkip, fmt.Sprintf("lp: %s; rollapp: %s: min_fee: %s", lp.address, order.rollappId, minFee.String()))
 			continue
 		}
 
 		if !lp.hasBalance(order.price) {
-			lpSkip = append(lpSkip, fmt.Sprintf("%s: balance", lp.address))
+			lpSkip = append(lpSkip, fmt.Sprintf("lp: %s; rollapp: %s: balance", lp.address, order.rollappId))
 			continue
 		}
 

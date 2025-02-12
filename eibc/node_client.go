@@ -72,12 +72,21 @@ const (
 	blockValidatedPath = "/block_validated"
 )
 
+var rollappWhitelist = map[string]struct{}{
+	"mande_18071918-1":  {},
+	"nim_1122-1":        {},
+	"dymwizards_4444-1": {},
+}
+
 func (c *nodeClient) BlockValidated(
 	ctx context.Context,
 	rollappID string,
 	height int64,
 	expectedValidationLevel validationLevel,
 ) (bool, error) {
+	if _, ok := rollappWhitelist[rollappID]; ok {
+		return true, nil
+	}
 	var validatedNodes int32
 	var wg sync.WaitGroup
 	rollappConfig := c.rollapps[rollappID]

@@ -267,6 +267,15 @@ func (p *orderPoller) getDemandOrdersFromRPC(ctx context.Context) ([]Order, erro
 }
 
 func (p *orderPoller) getRollappDemandOrdersFromRPC(ctx context.Context, rollappId string, typ eibc.RollappPacket_Type) ([]Order, error) {
+	var lastFinalizedHeight uint64 = 0
+	lastHeightResp, err := p.rollappClient.LatestHeight(ctx, &types.QueryGetLatestHeightRequest{
+		RollappId: rollappId,
+		Finalized: true,
+	})
+	if err == nil {
+		lastFinalizedHeight = lastHeightResp.Height
+	}
+
 	resp, err := p.eibcOrderClient.DemandOrdersByStatus(ctx, &eibc.QueryDemandOrdersByStatusRequest{
 		Status:           eibc.Status_PENDING,
 		Type:             typ,
@@ -288,13 +297,21 @@ func (p *orderPoller) getRollappDemandOrdersFromRPC(ctx context.Context, rollapp
 		if order.Fee == nil || order.Fee.IsAnyNil() {
 			continue
 		}
+
+		proofHeightEndian := strings.Split(order.TrackingPacketKey, "/")[2]
+		proofHeight := sdk.BigEndianToUint64([]byte(proofHeightEndian))
+
+		if proofHeight <= lastFinalizedHeight {
+			continue
+		}
+
 		orders = append(orders, Order{
 			EibcOrderId: order.Id,
-			Amount:      order.Price[0].Amount.String(),
-			Price:       order.Price[0].Amount.Add(order.Fee[0].Amount).String(),
+			Amount:      order.Price[0].Amount.Add(order.Fee[0].Amount).String(),
+			Price:       order.Price[0].Amount.String(),
 			Fee:         order.Fee[0].String(),
 			RollappId:   order.RollappId,
-			ProofHeight: fmt.Sprint(order.CreationHeight),
+			ProofHeight: fmt.Sprint(proofHeight),
 			BlockHeight: "0",
 		})
 	}

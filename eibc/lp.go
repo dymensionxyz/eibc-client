@@ -216,8 +216,6 @@ func (or *orderTracker) loadLPs(ctx context.Context) error {
 
 	if len(or.lps) == 0 {
 		or.logger.Info("no LPs found")
-	} else {
-		or.logger.Debug("loaded LPs", zap.Int("count", len(or.lps)))
 	}
 
 	if lpsUpdated || (currentLPCount > 0 && len(or.lps) > currentLPCount) {
