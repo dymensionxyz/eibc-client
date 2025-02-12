@@ -35,6 +35,10 @@ func (op *orderPool) upsertOrder(order ...*demandOrder) {
 	defer op.opmu.Unlock()
 
 	for _, o := range order {
+		// skip if order is already in the pool and is being checked
+		if ord, ok := op.orders[o.id]; ok && ord.checking {
+			continue
+		}
 		op.orders[o.id] = o
 	}
 }

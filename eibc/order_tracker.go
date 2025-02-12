@@ -102,7 +102,7 @@ func (or *orderTracker) start(ctx context.Context) error {
 }
 
 func (or *orderTracker) lpLoader(ctx context.Context) {
-	t := time.NewTicker(30 * time.Second)
+	t := time.NewTicker(60 * time.Second)
 	for {
 		select {
 		case <-ctx.Done():
@@ -132,6 +132,17 @@ func (or *orderTracker) checkOrders() {
 	if len(orders) == 0 {
 		return
 	}
+
+	slices.SortFunc(orders, func(o1, o2 *demandOrder) int {
+		if o1.proofHeight < o2.proofHeight {
+			return 1
+		} else if o1.proofHeight > o2.proofHeight {
+			return -1
+		} else {
+			return 0
+		}
+	})
+
 	// in "sequencer" mode send the orders directly to be fulfilled,
 	// in other modes, send the orders to be checked for validity
 	// if or.validation.FallbackLevel == config.ValidationModeSequencer {

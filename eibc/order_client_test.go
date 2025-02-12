@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -331,7 +332,7 @@ func Test_OrderFulfillment(t *testing.T) {
 		},
 		Fulfillers: config.FulfillerConfig{
 			Scale:          10,
-			MaxOrdersPerTx: 3,
+			MaxOrdersPerTx: 1,
 		},
 		Validation: config.ValidationConfig{
 			WaitTime: time.Second,
@@ -339,35 +340,43 @@ func Test_OrderFulfillment(t *testing.T) {
 		},
 	}
 
-	var count int
+	fulfilledOrders := make(map[string]struct{})
+	m := sync.Mutex{}
+
 	fulfillOrdersFn := func(demandOrder ...*demandOrder) error {
-		count++
+		m.Lock()
+		defer m.Unlock()
+
+		time.Sleep(2 * time.Second)
+
+		for _, o := range demandOrder {
+			if _, ok := fulfilledOrders[o.id]; ok {
+				t.Fatalf("order %s already fulfilled", o.id)
+			}
+			fulfilledOrders[o.id] = struct{}{}
+		}
 		return nil
 	}
 
 	balance := sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210000000000)), sdk.NewCoin("adym", sdk.NewInt(150000000000)))
-	a, err := cdctypes.NewAnyWithValue(&types.FulfillOrderAuthorization{
-		Rollapps: []*types.RollappCriteria{
-			{
-				RollappId:           "rollapp1",
-				Denoms:              []string{"stake", "adym"},
-				MinFeePercentage:    sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
-				MaxPrice:            sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210)), sdk.NewCoin("adym", sdk.NewInt(150))),
-				OperatorFeeShare:    sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
-				SpendLimit:          balance,
-				SettlementValidated: false,
-			},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	lpAddr := "lp-address"
 	lpBalances := make(map[string]sdk.Coins)
 	lpBalances[lpAddr] = balance
 
 	getLPGrants := func(ctx context.Context, in *authz.QueryGranteeGrantsRequest, opts ...grpc.CallOption) (*authz.QueryGranteeGrantsResponse, error) {
+		a, _ := cdctypes.NewAnyWithValue(&types.FulfillOrderAuthorization{
+			Rollapps: []*types.RollappCriteria{
+				{
+					RollappId:           "rollapp1",
+					Denoms:              []string{"stake", "adym"},
+					MinFeePercentage:    sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
+					MaxPrice:            sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210)), sdk.NewCoin("adym", sdk.NewInt(150))),
+					OperatorFeeShare:    sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
+					SpendLimit:          balance,
+					SettlementValidated: false,
+				},
+			},
+		})
 		return &authz.QueryGranteeGrantsResponse{
 			Grants: []*authz.GrantAuthorization{
 				{
@@ -380,14 +389,14 @@ func Test_OrderFulfillment(t *testing.T) {
 	}
 
 	var pollOrders []Order
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 200; i++ {
 		pollOrders = append(pollOrders, Order{
 			EibcOrderId: fmt.Sprintf("order-%d", i),
 			Amount:      "92",
 			Price:       "80",
 			Fee:         "12stake",
 			RollappId:   "rollapp1",
-			ProofHeight: "1",
+			ProofHeight: fmt.Sprint(i + 1),
 			BlockHeight: "1",
 		})
 	}
@@ -537,6 +546,8 @@ func mockGetPollerOrders(orders []Order) func(ctx context.Context) ([]Order, err
 		defer func() {
 			orders = nil
 		}()
+
+		time.Sleep(2 * time.Second)
 		return orders, nil
 	}
 }
