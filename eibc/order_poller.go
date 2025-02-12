@@ -34,6 +34,7 @@ type orderPoller struct {
 	getOrders       func(ctx context.Context) ([]Order, error)
 	orderTracker    *orderTracker
 	lastBlockHeight atomic.Uint64
+	noLPOrders      map[string]struct{}
 }
 
 func newOrderPoller(
@@ -53,6 +54,7 @@ func newOrderPoller(
 		rollappClient:   types.NewQueryClient(clientCtx),
 		eibcOrderClient: eibc.NewQueryClient(clientCtx),
 		indexerClient:   &http.Client{Timeout: 25 * time.Second},
+		noLPOrders:      make(map[string]struct{}),
 	}
 	o.getOrders = o.getDemandOrdersFromRPC
 	return o
@@ -142,6 +144,10 @@ func (p *orderPoller) pollPendingDemandOrders(ctx context.Context) error {
 
 func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder) {
 	for _, order := range demandOrders {
+		if _, ok := p.noLPOrders[order.EibcOrderId]; ok {
+			continue
+		}
+
 		if order.Fee == "" {
 			continue
 		}
@@ -208,6 +214,7 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 
 		if err := p.orderTracker.findLPForOrder(newOrder); err != nil {
 			p.logger.Debug("failed to find LP for order", zap.Error(err), zap.String("order_id", newOrder.id))
+			p.noLPOrders[newOrder.id] = struct{}{}
 			continue
 		}
 
@@ -356,4 +363,5 @@ func (p *orderPoller) getRollappDemandOrdersFromIndexer(ctx context.Context, rol
 
 func (p *orderPoller) resetOrderPolling() {
 	p.lastBlockHeight.Store(0)
+	p.noLPOrders = make(map[string]struct{})
 }

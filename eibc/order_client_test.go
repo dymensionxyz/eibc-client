@@ -442,6 +442,7 @@ func setupTestOrderClient(
 ) (*orderClient, error) {
 	logger, _ := zap.NewDevelopment()
 	orderCh := make(chan []*demandOrder, config.NewOrderBufferSize)
+	processedCh := make(chan []*demandOrder, config.NewOrderBufferSize)
 
 	// tracker
 	trackerClient := hubClient
@@ -459,6 +460,7 @@ func setupTestOrderClient(
 		cfg.Fulfillers.MaxOrdersPerTx,
 		&cfg.Validation,
 		orderCh,
+		processedCh,
 		cfg.OrderPolling.Interval,
 		cfg.Validation.Interval,
 		func() {},
@@ -499,6 +501,7 @@ func setupTestOrderClient(
 			"policyAddress",
 			&hc,
 			orderCh,
+			processedCh,
 			ordTracker.releaseAllReservedOrdersFunds,
 			ordTracker.debitAllReservedOrdersFunds,
 			cfg.Fulfillers.MaxOrdersPerTx,
