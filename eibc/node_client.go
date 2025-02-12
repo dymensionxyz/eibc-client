@@ -14,9 +14,15 @@ import (
 )
 
 type nodeClient struct {
-	client   *http.Client
-	rollapps map[string]config.RollappConfig
-	get      getFn
+	client          *http.Client
+	rollapps        map[string]config.RollappConfig
+	lastValidHeight map[string]valid
+	get             getFn
+}
+
+type valid struct {
+	height        int64
+	confirmations int
 }
 
 type getFn func(ctx context.Context, url string) (*blockValidatedResponse, error)
@@ -62,7 +68,8 @@ func newNodeClient(rollapps map[string]config.RollappConfig) (*nodeClient, error
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
-		rollapps: rollapps,
+		rollapps:        rollapps,
+		lastValidHeight: make(map[string]valid),
 	}
 	n.get = n.getHttp
 	return n, nil
@@ -87,9 +94,15 @@ func (c *nodeClient) BlockValidated(
 	if _, ok := rollappWhitelist[rollappID]; ok {
 		return true, nil
 	}
+
+	rollappConfig := c.rollapps[rollappID]
+
+	if lv := c.lastValidHeight[rollappID]; height <= lv.height && lv.confirmations >= rollappConfig.MinConfirmations {
+		return true, nil
+	}
+
 	var validatedNodes int32
 	var wg sync.WaitGroup
-	rollappConfig := c.rollapps[rollappID]
 	errChan := make(chan error, len(rollappConfig.FullNodes))
 
 	for _, location := range rollappConfig.FullNodes {
@@ -118,6 +131,11 @@ func (c *nodeClient) BlockValidated(
 
 	if len(errChan) > 0 {
 		return false, <-errChan
+	}
+
+	c.lastValidHeight[rollappID] = valid{
+		height:        height,
+		confirmations: int(validatedNodes),
 	}
 
 	return int(validatedNodes) >= rollappConfig.MinConfirmations, nil

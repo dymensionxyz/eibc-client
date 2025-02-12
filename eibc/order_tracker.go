@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -35,12 +36,12 @@ type orderTracker struct {
 
 	pool orderPool
 
-	batchSize              int
-	validation             *config.ValidationConfig
-	toCheckOrdersCh        chan []*demandOrder
-	subscriberID           string
-	balanceRefreshInterval time.Duration
-	validateOrdersInterval time.Duration
+	numFulfillers, maxOrdersPerTx int
+	validation                    *config.ValidationConfig
+	toCheckOrdersCh               chan []*demandOrder
+	subscriberID                  string
+	balanceRefreshInterval        time.Duration
+	validateOrdersInterval        time.Duration
 }
 
 type (
@@ -54,7 +55,8 @@ func newOrderTracker(
 	minOperatorFeeShare sdk.Dec,
 	fullNodeClient *nodeClient,
 	subscriberID string,
-	batchSize int,
+	numFulfillers,
+	maxOrdersPerTx int,
 	validation *config.ValidationConfig,
 	ordersCh chan<- []*demandOrder,
 	balanceRefreshInterval,
@@ -73,7 +75,8 @@ func newOrderTracker(
 		fullNodeClient:         fullNodeClient,
 		pool:                   orderPool{orders: make(map[string]*demandOrder)},
 		lps:                    make(map[string]*lp),
-		batchSize:              batchSize,
+		numFulfillers:          numFulfillers,
+		maxOrdersPerTx:         maxOrdersPerTx,
 		validation:             validation,
 		validOrdersCh:          make(chan []*demandOrder),
 		outputOrdersCh:         ordersCh,
@@ -81,7 +84,7 @@ func newOrderTracker(
 		subscriberID:           subscriberID,
 		balanceRefreshInterval: balanceRefreshInterval,
 		validateOrdersInterval: validateOrdersInterval,
-		toCheckOrdersCh:        make(chan []*demandOrder, batchSize),
+		toCheckOrdersCh:        make(chan []*demandOrder, numFulfillers),
 	}
 }
 
@@ -125,17 +128,17 @@ func (or *orderTracker) orderValidator(ctx context.Context) {
 }
 
 func (or *orderTracker) checkOrders() {
-	orders := or.pool.popOrders(or.batchSize)
+	orders := or.pool.popOrders(config.NewOrderBufferSize)
 	if len(orders) == 0 {
 		return
 	}
 	// in "sequencer" mode send the orders directly to be fulfilled,
 	// in other modes, send the orders to be checked for validity
-	if or.validation.FallbackLevel == config.ValidationModeSequencer {
-		or.outputOrdersCh <- orders
-	} else {
-		or.toCheckOrdersCh <- orders
-	}
+	// if or.validation.FallbackLevel == config.ValidationModeSequencer {
+	//	or.outputOrdersCh <- orders
+	// } else {
+	or.toCheckOrdersCh <- orders
+	// }
 }
 
 func (or *orderTracker) enqueueValidOrders(ctx context.Context) {
@@ -146,7 +149,11 @@ func (or *orderTracker) enqueueValidOrders(ctx context.Context) {
 		case orders := <-or.toCheckOrdersCh:
 			validOrders, retryOrders := or.getValidAndRetryOrders(ctx, orders)
 			if len(validOrders) > 0 {
-				or.outputOrdersCh <- validOrders
+				chunkSize := max(or.maxOrdersPerTx, len(validOrders)/or.numFulfillers)
+				slices.Chunk(validOrders, chunkSize)(func(batch []*demandOrder) bool {
+					or.outputOrdersCh <- batch
+					return true
+				})
 			}
 			if len(retryOrders) > 0 {
 				or.pool.addOrder(retryOrders...)
@@ -214,7 +221,7 @@ func (or *orderTracker) trackOrders(orders ...*demandOrder) {
 	// - in mode "sequencer" we send a batch directly to be fulfilled,
 	// and any orders that overflow the batch are added to the pool
 	// - in mode "p2p" and "settlement" all orders are added to the pool
-	if or.validation.FallbackLevel == config.ValidationModeSequencer {
+	/*if or.validation.FallbackLevel == config.ValidationModeSequencer {
 		var (
 			batchToSend []*demandOrder
 			batchToPool []*demandOrder
@@ -229,7 +236,7 @@ func (or *orderTracker) trackOrders(orders ...*demandOrder) {
 		}
 		or.outputOrdersCh <- batchToSend
 		orders = batchToPool
-	}
+	}*/
 	or.pool.upsertOrder(orders...)
 	go or.checkOrders()
 }

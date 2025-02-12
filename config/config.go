@@ -40,7 +40,7 @@ type FulfillerConfig struct {
 	PolicyAddress   string                       `mapstructure:"policy_address"`
 	KeyringBackend  cosmosaccount.KeyringBackend `mapstructure:"keyring_backend"`
 	KeyringDir      string                       `mapstructure:"keyring_dir"`
-	BatchSize       int                          `mapstructure:"batch_size"`
+	MaxOrdersPerTx  int                          `mapstructure:"max_orders_per_tx"`
 }
 
 type OperatorConfig struct {
@@ -77,7 +77,7 @@ const (
 	defaultOperatorMinFeeShare     = 0.1
 	defaultFulfillerScale          = 30
 	NewOrderBufferSize             = 100
-	defaultMaxOrdersPerTx          = 10
+	defaultMaxOrdersPerTx          = 1
 	defaultOrderRefreshInterval    = 30 * time.Second
 	defaultValidationFallbackLevel = "p2p"
 	defaultValidationWaitTime      = "61m"

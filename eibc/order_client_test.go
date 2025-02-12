@@ -53,8 +53,8 @@ func TestOrderClient(t *testing.T) {
 					MinFeeShare: "0.1",
 				},
 				Fulfillers: config.FulfillerConfig{
-					Scale:     3,
-					BatchSize: 4,
+					Scale:          3,
+					MaxOrdersPerTx: 4,
 				},
 				Validation: config.ValidationConfig{
 					WaitTime: time.Second,
@@ -71,14 +71,14 @@ func TestOrderClient(t *testing.T) {
 								MinFeePercentage:    sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
 								MaxPrice:            sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210)), sdk.NewCoin("adym", sdk.NewInt(150))),
 								OperatorFeeShare:    sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
-								SpendLimit:          nil,
+								SpendLimit:          sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210)), sdk.NewCoin("adym", sdk.NewInt(150))),
 								SettlementValidated: false,
 							}, {
 								RollappId:        "rollapp2",
 								Denoms:           []string{"stake", "adym"},
 								MinFeePercentage: sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
 								MaxPrice:         sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210)), sdk.NewCoin("adym", sdk.NewInt(150))),
-								SpendLimit:       nil,
+								SpendLimit:       sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210)), sdk.NewCoin("adym", sdk.NewInt(150))),
 								OperatorFeeShare: sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
 							}},
 					},
@@ -90,7 +90,7 @@ func TestOrderClient(t *testing.T) {
 							Denoms:              []string{"adym"},
 							MinFeePercentage:    sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
 							MaxPrice:            sdk.NewCoins(sdk.NewCoin("adym", sdk.NewInt(450))),
-							SpendLimit:          nil,
+							SpendLimit:          sdk.NewCoins(sdk.NewCoin("adym", sdk.NewInt(450))),
 							OperatorFeeShare:    sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.2")},
 							SettlementValidated: true,
 						}},
@@ -103,7 +103,7 @@ func TestOrderClient(t *testing.T) {
 							Denoms:              []string{"stake"},
 							MinFeePercentage:    sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
 							MaxPrice:            sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(450))),
-							SpendLimit:          nil,
+							SpendLimit:          sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(450))),
 							OperatorFeeShare:    sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.2")},
 							SettlementValidated: false,
 						}},
@@ -320,6 +320,107 @@ func TestOrderClient(t *testing.T) {
 	}
 }
 
+func Test_OrderFulfillment(t *testing.T) {
+	cfg := config.Config{
+		OrderPolling: config.OrderPollingConfig{
+			Interval: 5 * time.Second,
+			Enabled:  true,
+		},
+		Operator: config.OperatorConfig{
+			MinFeeShare: "0.1",
+		},
+		Fulfillers: config.FulfillerConfig{
+			Scale:          10,
+			MaxOrdersPerTx: 3,
+		},
+		Validation: config.ValidationConfig{
+			WaitTime: time.Second,
+			Interval: time.Second,
+		},
+	}
+
+	var count int
+	fulfillOrdersFn := func(demandOrder ...*demandOrder) error {
+		count++
+		return nil
+	}
+
+	balance := sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210000000000)), sdk.NewCoin("adym", sdk.NewInt(150000000000)))
+	a, err := cdctypes.NewAnyWithValue(&types.FulfillOrderAuthorization{
+		Rollapps: []*types.RollappCriteria{
+			{
+				RollappId:           "rollapp1",
+				Denoms:              []string{"stake", "adym"},
+				MinFeePercentage:    sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
+				MaxPrice:            sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210)), sdk.NewCoin("adym", sdk.NewInt(150))),
+				OperatorFeeShare:    sdk.DecProto{Dec: sdk.MustNewDecFromStr("0.1")},
+				SpendLimit:          balance,
+				SettlementValidated: false,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lpAddr := "lp-address"
+	lpBalances := make(map[string]sdk.Coins)
+	lpBalances[lpAddr] = balance
+
+	getLPGrants := func(ctx context.Context, in *authz.QueryGranteeGrantsRequest, opts ...grpc.CallOption) (*authz.QueryGranteeGrantsResponse, error) {
+		return &authz.QueryGranteeGrantsResponse{
+			Grants: []*authz.GrantAuthorization{
+				{
+					Granter:       lpAddr,
+					Grantee:       "policyAddress",
+					Authorization: a,
+				},
+			},
+		}, nil
+	}
+
+	var pollOrders []Order
+	for i := 0; i < 100; i++ {
+		pollOrders = append(pollOrders, Order{
+			EibcOrderId: fmt.Sprintf("order-%d", i),
+			Amount:      "92",
+			Price:       "80",
+			Fee:         "12stake",
+			RollappId:   "rollapp1",
+			ProofHeight: "1",
+			BlockHeight: "1",
+		})
+	}
+
+	rollappWhitelist["rollapp1"] = struct{}{}
+
+	oc, err := setupTestOrderClient(
+		cfg,
+		mockGetPollerOrders(pollOrders),
+		mockNodeClient{},
+		&nodeClient{
+			rollapps: map[string]config.RollappConfig{
+				"rollapp1": {
+					MinConfirmations: 1,
+					FullNodes:        []string{},
+				},
+			},
+		},
+		getLPGrants,
+		fulfillOrdersFn,
+		lpBalances,
+		sdk.MustNewDecFromStr(cfg.Operator.MinFeeShare),
+	)
+	require.NoError(t, err)
+
+	go func() {
+		err = oc.Start(context.Background())
+		require.NoError(t, err)
+	}()
+
+	<-make(chan struct{})
+}
+
 func setupTestOrderClient(
 	cfg config.Config,
 	pollOrders func(ctx context.Context) ([]Order, error),
@@ -345,7 +446,8 @@ func setupTestOrderClient(
 		minOperatorFeeShare,
 		fullNodeClient,
 		"subscriber",
-		cfg.Fulfillers.BatchSize,
+		cfg.Fulfillers.Scale,
+		cfg.Fulfillers.MaxOrdersPerTx,
 		&cfg.Validation,
 		orderCh,
 		cfg.OrderPolling.Interval,
@@ -390,6 +492,7 @@ func setupTestOrderClient(
 			orderCh,
 			ordTracker.releaseAllReservedOrdersFunds,
 			ordTracker.debitAllReservedOrdersFunds,
+			cfg.Fulfillers.MaxOrdersPerTx,
 		)
 		if err != nil {
 			return nil, err

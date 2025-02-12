@@ -29,6 +29,7 @@ type orderFulfiller struct {
 	releaseAllReservedOrdersFunds func(demandOrder ...*demandOrder)
 	debitAllReservedOrdersFunds   func(demandOrder ...*demandOrder)
 	newOrdersCh                   chan []*demandOrder
+	maxOrdersPerTx                int
 }
 
 type cosmosClient interface {
@@ -45,6 +46,7 @@ func newOrderFulfiller(
 	newOrdersCh chan []*demandOrder,
 	releaseAllReservedOrdersFunds func(demandOrder ...*demandOrder),
 	debitAllReservedOrdersFunds func(demandOrder ...*demandOrder),
+	maxOrdersPerTx int,
 ) (*orderFulfiller, error) {
 	o := &orderFulfiller{
 		account:                       acc,
@@ -54,6 +56,7 @@ func newOrderFulfiller(
 		newOrdersCh:                   newOrdersCh,
 		releaseAllReservedOrdersFunds: releaseAllReservedOrdersFunds,
 		debitAllReservedOrdersFunds:   debitAllReservedOrdersFunds,
+		maxOrdersPerTx:                maxOrdersPerTx,
 		logger: logger.With(zap.String("module", "order-fulfiller"),
 			zap.String("name", acc.Name), zap.String("address", acc.Address)),
 	}
@@ -81,17 +84,18 @@ func (ol *orderFulfiller) fulfillOrders(ctx context.Context) {
 	}
 }
 
-func (ol *orderFulfiller) processBatch(batch []*demandOrder) error {
-	if len(batch) == 0 {
+func (ol *orderFulfiller) processBatch(orders []*demandOrder) error {
+	if len(orders) == 0 {
 		ol.logger.Debug("no orders to fulfill")
 		return nil
 	}
 
 	var (
-		ids []string
-		lps []string
+		ids, idsDone, idsFail []string
+		lps, lpsDone          []string
 	)
-	for _, order := range batch {
+
+	for _, order := range orders {
 		ids = append(ids, order.id)
 		if !slices.Contains(lps, order.lpAddress) {
 			lps = append(lps, order.lpAddress)
@@ -100,14 +104,25 @@ func (ol *orderFulfiller) processBatch(batch []*demandOrder) error {
 
 	ol.logger.Info("fulfilling orders", zap.Strings("ids", ids), zap.Strings("lps", lps))
 
-	if err := ol.FulfillDemandOrders(batch...); err != nil {
-		ol.releaseAllReservedOrdersFunds(batch...)
-		return fmt.Errorf("failed to fulfill orders: ids: %v; lps: %v; %w", ids, lps, err)
-	} else {
+	slices.Chunk(orders, ol.maxOrdersPerTx)(func(batch []*demandOrder) bool {
+		if err := ol.FulfillDemandOrders(batch...); err != nil {
+			ol.releaseAllReservedOrdersFunds(batch...)
+			ol.logger.Error("failed to fulfill orders", zap.Error(err))
+			idsFail = append(idsFail, ids...)
+			return false
+		}
 		ol.debitAllReservedOrdersFunds(batch...)
-	}
 
-	ol.logger.Info("orders fulfilled", zap.Strings("ids", ids))
+		for _, order := range batch {
+			idsDone = append(idsDone, order.id)
+			if !slices.Contains(lpsDone, order.lpAddress) {
+				lpsDone = append(lpsDone, order.lpAddress)
+			}
+		}
+		return true
+	})
+
+	ol.logger.Info("orders fulfilled", zap.Strings("ids", idsDone), zap.Strings("failed", idsFail), zap.Strings("lps", lpsDone))
 
 	return nil
 }

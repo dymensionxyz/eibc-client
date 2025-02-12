@@ -55,7 +55,8 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 			minOperatorFeeShare,
 			fullNodeClient,
 			subscriberID,
-			cfg.Fulfillers.BatchSize,
+			cfg.Fulfillers.Scale,
+			cfg.Fulfillers.MaxOrdersPerTx,
 			&cfg.Validation,
 			orderCh,
 			cfg.OrderPolling.Interval, // we can use the same interval for order polling and LP balance checking
@@ -162,6 +163,7 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 			orderCh,
 			oc.orderTracker.releaseAllReservedOrdersFunds,
 			oc.orderTracker.debitAllReservedOrdersFunds,
+			cfg.Fulfillers.MaxOrdersPerTx,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create fulfiller: %w", err)
