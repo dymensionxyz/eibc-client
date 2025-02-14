@@ -108,9 +108,14 @@ func (ol *orderFulfiller) processBatch(orders []*demandOrder) error {
 
 	slices.Chunk(orders, ol.maxOrdersPerTx)(func(batch []*demandOrder) bool {
 		if err := ol.FulfillDemandOrders(batch...); err != nil {
+			for _, order := range batch {
+				idsFail = append(idsFail, order.id)
+				if !slices.Contains(lpsDone, order.lpAddress) {
+					lpsDone = append(lpsDone, order.lpAddress)
+				}
+			}
 			ol.releaseAllReservedOrdersFunds(batch...)
-			ol.logger.Error("failed to fulfill orders", zap.Error(err))
-			idsFail = append(idsFail, ids...)
+			ol.logger.Error("failed to fulfill orders", zap.Strings("ids", idsFail), zap.Error(err))
 			return false
 		}
 		ol.debitAllReservedOrdersFunds(batch...)
