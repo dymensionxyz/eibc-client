@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -127,15 +128,14 @@ func (p *orderPoller) pollPendingDemandOrders(ctx context.Context) error {
 		return nil
 	}
 
-	// if p.logger.Level() <= zap.DebugLevel {
-	//	ids := make([]string, 0, len(newOrders))
-	//	for _, order := range newOrders {
-	//		ids = append(ids, order.id)
-	//	}
-	//	p.logger.Debug("new demand orders", zap.Strings("ids", ids))
-	// } else {
-	p.logger.Info("new demand orders", zap.Int("count", len(newOrders)))
-	// }
+	rollaps := make([]string, 0, len(newOrders))
+	for _, order := range newOrders {
+		if slices.Contains(rollaps, order.rollappId) {
+			continue
+		}
+		rollaps = append(rollaps, order.rollappId)
+	}
+	p.logger.Info("new demand orders", zap.Int("count", len(newOrders)), zap.Strings("rollapps", rollaps))
 
 	p.orderTracker.trackOrders(newOrders...)
 
@@ -233,10 +233,6 @@ func (p *orderPoller) getDemandOrdersFromIndexer(ctx context.Context) ([]Order, 
 		demandOrders = append(demandOrders, orders...)
 	}
 
-	if len(demandOrders) > 0 {
-		p.logger.Debug("got demand orders", zap.Int("count", len(demandOrders)))
-	}
-
 	return demandOrders, nil
 }
 
@@ -268,10 +264,6 @@ func (p *orderPoller) getDemandOrdersFromRPC(ctx context.Context) ([]Order, erro
 			continue
 		}
 		orders = append(orders, order)
-	}
-
-	if len(orders) > 0 {
-		p.logger.Debug("got demand orders", zap.Int("count", len(orders)))
 	}
 
 	return orders, nil

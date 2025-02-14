@@ -3,6 +3,7 @@ package eibc
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -73,15 +74,16 @@ func (e *orderEventer) enqueueEventOrders(_ context.Context, eventName string, r
 	}
 	e.orderTracker.trackOrders(orders...)
 
-	if e.logger.Level() <= zap.DebugLevel {
-		ids := make([]string, 0, len(orders))
-		for _, order := range orders {
-			ids = append(ids, order.id)
+	rollaps := make([]string, 0, len(orders))
+	ids := make([]string, 0, len(orders))
+	for _, order := range orders {
+		ids = append(ids, order.id)
+		if slices.Contains(rollaps, order.rollappId) {
+			continue
 		}
-		e.logger.Debug(fmt.Sprintf("%s demand orders", d), zap.Strings("ids", ids))
-	} else {
-		e.logger.Info(fmt.Sprintf("%s demand orders", d), zap.Int("count", len(orders)))
+		rollaps = append(rollaps, order.rollappId)
 	}
+	e.logger.Info(fmt.Sprintf("%s demand orders", d), zap.Strings("ids", ids), zap.Strings("rollapps", rollaps))
 
 	return nil
 }
