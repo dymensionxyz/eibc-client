@@ -164,6 +164,7 @@ func GetCosmosClientOptions(config ClientConfig) []cosmosclient.Option {
 		cosmosclient.WithFees(config.GasFees),
 		cosmosclient.WithGas(cosmosclient.GasAuto),
 		cosmosclient.WithGasPrices(config.GasPrices),
+		cosmosclient.WithGasAdjustment(1.3),
 		cosmosclient.WithKeyringBackend(config.KeyringBackend),
 		cosmosclient.WithKeyringDir(config.HomeDir),
 		cosmosclient.WithFeeGranter(config.FeeGranter),

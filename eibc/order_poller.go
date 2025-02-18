@@ -307,14 +307,14 @@ func (p *orderPoller) getRollappDemandOrdersFromRPC(ctx context.Context, rollapp
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					p.logger.Error("failed to parse proof height", zap.String("proof_height", proofHeightEndian))
+					p.logger.Error("failed to parse proof height", zap.String("proof_height", proofHeightEndian), zap.String("order_id", order.Id))
 				}
 			}()
 
 			proofHeight = sdk.BigEndianToUint64([]byte(proofHeightEndian))
 		}()
 
-		if proofHeight <= lastFinalizedHeight {
+		if proofHeight > 0 && proofHeight <= lastFinalizedHeight {
 			continue
 		}
 
