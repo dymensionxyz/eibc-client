@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	sdk "github.com/cosmos/cosmos-sdk/types"
+	"cosmossdk.io/math"
 	"github.com/cosmos/cosmos-sdk/x/authz"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	"go.uber.org/zap"
@@ -33,7 +33,7 @@ type orderTracker struct {
 	outputOrdersCh      chan<- []*demandOrder
 	processedOrdersCh   chan []*demandOrder
 	lps                 map[string]*lp
-	minOperatorFeeShare sdk.Dec
+	minOperatorFeeShare math.LegacyDec
 
 	pool orderPool
 
@@ -53,7 +53,7 @@ type (
 func newOrderTracker(
 	hubClient cosmosClient,
 	policyAddress string,
-	minOperatorFeeShare sdk.Dec,
+	minOperatorFeeShare math.LegacyDec,
 	fullNodeClient *nodeClient,
 	subscriberID string,
 	numFulfillers,
@@ -354,7 +354,7 @@ func (or *orderTracker) filterLPsForOrder(order *demandOrder) ([]*lp, []string) 
 		}
 
 		// check the fee is at least the minimum of what the lp wants
-		minFee := sdk.NewDecFromInt(order.amount).Mul(rollapp.MinFeePercentage).TruncateInt()
+		minFee := math.LegacyNewDecFromInt(order.amount).Mul(rollapp.MinFeePercentage).TruncateInt()
 
 		if order.fee.Amount.LT(minFee) {
 			lpSkip = append(lpSkip, fmt.Sprintf("lp: %s; rollapp: %s: min_fee: %s", lp.address, order.rollappId, minFee.String()))
