@@ -63,7 +63,7 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 			processedCh,
 			cfg.OrderPolling.Interval, // we can use the same interval for order polling and LP balance checking
 			cfg.Validation.Interval,
-			nil, // set below
+			func() {},
 			logger,
 		),
 		logger: logger,
