@@ -30,7 +30,7 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 	//nolint:gosec
 	subscriberID := fmt.Sprintf("eibc-client-%d", rand.Int())
 	orderCh := make(chan []*demandOrder, config.NewOrderBufferSize)
-	processedCh := make(chan []*demandOrder, config.NewOrderBufferSize)
+	processedCh := make(chan []string, config.NewOrderBufferSize)
 
 	hubClient, err := getHubClient(cfg)
 	if err != nil {

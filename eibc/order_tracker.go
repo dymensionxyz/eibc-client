@@ -31,7 +31,7 @@ type orderTracker struct {
 	fulfilledOrders     map[string]*demandOrder
 	validOrdersCh       chan []*demandOrder
 	outputOrdersCh      chan<- []*demandOrder
-	processedOrdersCh   chan []*demandOrder
+	processedOrdersCh   chan []string
 	lps                 map[string]*lp
 	minOperatorFeeShare sdk.Dec
 
@@ -60,7 +60,7 @@ func newOrderTracker(
 	maxOrdersPerTx int,
 	validation *config.ValidationConfig,
 	ordersCh chan<- []*demandOrder,
-	processedOrdersCh chan []*demandOrder,
+	processedOrdersCh chan []string,
 	balanceRefreshInterval,
 	validateOrdersInterval time.Duration,
 	resetPoller func(),
@@ -161,8 +161,8 @@ func (or *orderTracker) manageProcessed() {
 	for {
 		select {
 		case orders := <-or.processedOrdersCh:
-			for _, order := range orders {
-				or.pool.removeOrder(order.id)
+			for _, orderID := range orders {
+				or.pool.removeOrder(orderID)
 			}
 		}
 	}

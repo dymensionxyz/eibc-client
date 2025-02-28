@@ -28,7 +28,8 @@ type orderFulfiller struct {
 
 	releaseAllReservedOrdersFunds func(demandOrder ...*demandOrder)
 	debitAllReservedOrdersFunds   func(demandOrder ...*demandOrder)
-	newOrdersCh, processedCh      chan []*demandOrder
+	newOrdersCh                   chan []*demandOrder
+	processedCh                   chan []string
 	maxOrdersPerTx                int
 }
 
@@ -44,7 +45,7 @@ func newOrderFulfiller(
 	policyAddress string,
 	cClient cosmosClient,
 	newOrdersCh chan []*demandOrder,
-	processedCh chan []*demandOrder,
+	processedCh chan []string,
 	releaseAllReservedOrdersFunds func(demandOrder ...*demandOrder),
 	debitAllReservedOrdersFunds func(demandOrder ...*demandOrder),
 	maxOrdersPerTx int,
@@ -130,7 +131,7 @@ func (ol *orderFulfiller) processBatch(orders []*demandOrder) error {
 	})
 
 	ol.logger.Info("orders processed", zap.Strings("ids", idsDone), zap.Strings("failed", idsFail), zap.Strings("lps", lpsDone))
-	ol.processedCh <- orders
+	ol.processedCh <- idsDone
 
 	return nil
 }
