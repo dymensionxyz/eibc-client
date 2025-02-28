@@ -2,6 +2,8 @@ package eibc
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"slices"
@@ -31,11 +33,13 @@ type orderTracker struct {
 	fulfilledOrders     map[string]*demandOrder
 	validOrdersCh       chan []*demandOrder
 	outputOrdersCh      chan<- []*demandOrder
-	processedOrdersCh   chan []string
+	processedOrdersCh   chan []orderFulfillResult
 	lps                 map[string]*lp
 	minOperatorFeeShare sdk.Dec
 
-	pool orderPool
+	pool              orderPool
+	failedOrderHashes map[string]string
+	fohmu             sync.Mutex
 
 	numFulfillers, maxOrdersPerTx int
 	validation                    *config.ValidationConfig
@@ -60,7 +64,7 @@ func newOrderTracker(
 	maxOrdersPerTx int,
 	validation *config.ValidationConfig,
 	ordersCh chan<- []*demandOrder,
-	processedOrdersCh chan []string,
+	processedOrdersCh chan []orderFulfillResult,
 	balanceRefreshInterval,
 	validateOrdersInterval time.Duration,
 	resetPoller func(),
@@ -76,6 +80,7 @@ func newOrderTracker(
 		minOperatorFeeShare:    minOperatorFeeShare,
 		fullNodeClient:         fullNodeClient,
 		pool:                   orderPool{orders: make(map[string]*demandOrder)},
+		failedOrderHashes:      make(map[string]string),
 		lps:                    make(map[string]*lp),
 		numFulfillers:          numFulfillers,
 		maxOrdersPerTx:         maxOrdersPerTx,
@@ -161,8 +166,13 @@ func (or *orderTracker) manageProcessed() {
 	for {
 		select {
 		case orders := <-or.processedOrdersCh:
-			for _, orderID := range orders {
-				or.pool.removeOrder(orderID)
+			for _, orderRes := range orders {
+				if orderRes.failedOrderHash != "" {
+					or.fohmu.Lock()
+					or.failedOrderHashes[orderRes.orderID] = orderRes.failedOrderHash
+					or.fohmu.Unlock()
+				}
+				or.pool.removeOrder(orderRes.orderID)
 			}
 		}
 	}
@@ -272,6 +282,20 @@ func (or *orderTracker) canFulfillOrder(order *demandOrder) bool {
 	if !or.isRollappSupported(order.rollappId) {
 		return false
 	}
+
+	or.fohmu.Lock()
+	defer or.fohmu.Unlock()
+
+	if failedHash, ok := or.failedOrderHashes[order.id]; ok {
+		jsn, _ := json.Marshal(&hashableOrder{ID: order.id, Fee: order.fee})
+		hash := fmt.Sprintf("%x", sha256.Sum256(jsn))
+		if hash == failedHash {
+			return false
+		}
+
+		delete(or.failedOrderHashes, order.id)
+	}
+
 	return true
 }
 

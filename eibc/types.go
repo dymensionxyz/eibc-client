@@ -22,6 +22,16 @@ type demandOrder struct {
 	checking, valid     bool
 }
 
+type hashableOrder struct {
+	ID  string   `json:"id"`
+	Fee sdk.Coin `json:"fee"`
+}
+
+type orderFulfillResult struct {
+	orderID         string
+	failedOrderHash string
+}
+
 type account struct {
 	Name    string `json:"name"`
 	Address string `json:"address"`

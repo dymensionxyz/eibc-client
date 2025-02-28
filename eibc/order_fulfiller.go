@@ -2,6 +2,7 @@ package eibc
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -29,7 +30,7 @@ type orderFulfiller struct {
 	releaseAllReservedOrdersFunds func(demandOrder ...*demandOrder)
 	debitAllReservedOrdersFunds   func(demandOrder ...*demandOrder)
 	newOrdersCh                   chan []*demandOrder
-	processedCh                   chan []string
+	processedCh                   chan []orderFulfillResult
 	maxOrdersPerTx                int
 }
 
@@ -45,7 +46,7 @@ func newOrderFulfiller(
 	policyAddress string,
 	cClient cosmosClient,
 	newOrdersCh chan []*demandOrder,
-	processedCh chan []string,
+	processedCh chan []orderFulfillResult,
 	releaseAllReservedOrdersFunds func(demandOrder ...*demandOrder),
 	debitAllReservedOrdersFunds func(demandOrder ...*demandOrder),
 	maxOrdersPerTx int,
@@ -98,6 +99,9 @@ func (ol *orderFulfiller) processBatch(orders []*demandOrder) error {
 		lps, lpsDone          []string
 	)
 
+	failResults := make([]orderFulfillResult, 0, len(orders))
+	successResults := make([]orderFulfillResult, 0, len(orders))
+
 	for _, order := range orders {
 		ids = append(ids, order.id)
 		if !slices.Contains(lps, order.lpAddress) {
@@ -111,6 +115,13 @@ func (ol *orderFulfiller) processBatch(orders []*demandOrder) error {
 		if err := ol.FulfillDemandOrders(batch...); err != nil {
 			for _, order := range batch {
 				idsFail = append(idsFail, order.id)
+
+				jsn, _ := json.Marshal(&hashableOrder{ID: order.id, Fee: order.fee})
+				failResults = append(failResults, orderFulfillResult{
+					orderID:         order.id,
+					failedOrderHash: fmt.Sprintf("%x", sha256.Sum256(jsn)),
+				})
+
 				if !slices.Contains(lpsDone, order.lpAddress) {
 					lpsDone = append(lpsDone, order.lpAddress)
 				}
@@ -123,6 +134,10 @@ func (ol *orderFulfiller) processBatch(orders []*demandOrder) error {
 
 		for _, order := range batch {
 			idsDone = append(idsDone, order.id)
+			successResults = append(successResults, orderFulfillResult{
+				orderID: order.id,
+			})
+
 			if !slices.Contains(lpsDone, order.lpAddress) {
 				lpsDone = append(lpsDone, order.lpAddress)
 			}
@@ -131,7 +146,9 @@ func (ol *orderFulfiller) processBatch(orders []*demandOrder) error {
 	})
 
 	ol.logger.Info("orders processed", zap.Strings("ids", idsDone), zap.Strings("failed", idsFail), zap.Strings("lps", lpsDone))
-	ol.processedCh <- idsDone
+
+	ol.processedCh <- successResults
+	ol.processedCh <- failResults
 
 	return nil
 }
