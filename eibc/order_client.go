@@ -3,7 +3,9 @@ package eibc
 import (
 	"context"
 	"fmt"
+	"log"
 	"math/rand"
+	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/bech32"
@@ -197,7 +199,12 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 	return oc, nil
 }
 
-func getHubClient(cfg config.Config) (cosmosclient.Client, error) {
+const (
+	connectAttempts = 5
+	connectSleep    = 10 * time.Second
+)
+
+func getHubClient(cfg config.Config) (hubClient cosmosclient.Client, err error) {
 	// init cosmos client for order fetcher
 	hubClientCfg := config.ClientConfig{
 		HomeDir:        cfg.Fulfillers.KeyringDir,
@@ -207,12 +214,32 @@ func getHubClient(cfg config.Config) (cosmosclient.Client, error) {
 		KeyringBackend: cfg.Fulfillers.KeyringBackend,
 	}
 
-	hubClient, err := cosmosclient.New(config.GetCosmosClientOptions(hubClientCfg)...)
+	err = retry(connectAttempts, connectSleep, func() error {
+		var retryErr error
+		hubClient, retryErr = cosmosclient.New(config.GetCosmosClientOptions(hubClientCfg)...)
+		if retryErr != nil {
+			log.Printf("failed to obtain hub client, retrying in 10 seconds: %s", retryErr.Error())
+		}
+		return retryErr
+	})
 	if err != nil {
-		return cosmosclient.Client{}, fmt.Errorf("failed to create cosmos client: %w", err)
+		return cosmosclient.Client{}, fmt.Errorf("failed to create cosmos client after retries: %w", err)
 	}
 
 	return hubClient, nil
+}
+
+func retry(attempts int, sleep time.Duration, f func() error) (err error) {
+	for i := 0; i < attempts; i++ {
+		err = f()
+		if err == nil {
+			return
+		}
+		if i < attempts-1 {
+			time.Sleep(sleep)
+		}
+	}
+	return fmt.Errorf("all retry attempts failed: %w", err)
 }
 
 func getFullNodeClients(cfg config.Config) (*nodeClient, error) {
