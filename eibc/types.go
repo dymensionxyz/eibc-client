@@ -3,6 +3,7 @@ package eibc
 import (
 	"time"
 
+	"cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
@@ -16,7 +17,7 @@ type demandOrder struct {
 	proofHeight         int64
 	validDeadline       time.Time
 	settlementValidated bool
-	operatorFeePart     sdk.Dec
+	operatorFeePart     math.LegacyDec
 	lpAddress           string
 	from                string
 	checking, valid     bool

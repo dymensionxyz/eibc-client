@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/x/authz"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
@@ -31,8 +32,8 @@ type rollappCriteria struct {
 	RollappID           string
 	Denoms              map[string]bool
 	MaxPrice            sdk.Coins
-	MinFeePercentage    sdk.Dec
-	OperatorFeeShare    sdk.Dec
+	MinFeePercentage    math.LegacyDec
+	OperatorFeeShare    math.LegacyDec
 	SettlementValidated bool
 	spendLimit          sdk.Coins // keep private to exclude from hash, as spendLimit decreases as orders are fulfilled
 }
@@ -168,7 +169,7 @@ func (or *orderTracker) loadLPs(ctx context.Context) error {
 				continue
 			}
 			// check the operator fee is the minimum for what the operator wants
-			if rollapp.OperatorFeeShare.Dec.LT(or.minOperatorFeeShare) {
+			if rollapp.OperatorFeeShare.LT(or.minOperatorFeeShare) {
 				or.logger.Debug("operator fee share too low", zap.String("rollapp", rollapp.RollappId))
 				continue
 			}
@@ -182,8 +183,8 @@ func (or *orderTracker) loadLPs(ctx context.Context) error {
 				Denoms:              denoms,
 				MaxPrice:            rollapp.MaxPrice,
 				spendLimit:          rollapp.SpendLimit,
-				MinFeePercentage:    rollapp.MinFeePercentage.Dec,
-				OperatorFeeShare:    rollapp.OperatorFeeShare.Dec,
+				MinFeePercentage:    rollapp.MinFeePercentage,
+				OperatorFeeShare:    rollapp.OperatorFeeShare,
 				SettlementValidated: rollapp.SettlementValidated,
 			}
 			if existLP {

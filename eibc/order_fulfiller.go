@@ -169,8 +169,8 @@ func (ol *orderFulfiller) fulfillAuthorizedDemandOrders(demandOrder ...*demandOr
 			ol.operatorAddress,
 			order.fee.Amount.String(),
 			order.price,
-			sdk.IntProto{Int: order.amount},
-			sdk.DecProto{Dec: order.operatorFeePart},
+			order.amount,
+			order.operatorFeePart,
 			order.settlementValidated,
 		)
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	errorsmod "cosmossdk.io/errors"
+	"cosmossdk.io/math"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -19,8 +20,8 @@ func NewMsgFulfillOrderAuthorized(
 	operatorFeeAddress,
 	expectedFee string,
 	price sdk.Coins,
-	amount sdk.IntProto,
-	fulfillerFeePart sdk.DecProto,
+	amount math.Int,
+	fulfillerFeePart math.LegacyDec,
 	settlementValidated bool,
 ) *MsgFulfillOrderAuthorized {
 	return &MsgFulfillOrderAuthorized{
@@ -75,15 +76,15 @@ func (msg *MsgFulfillOrderAuthorized) ValidateBasic() error {
 		return errorsmod.Wrap(sdkerrors.ErrInvalidRequest, "price is invalid")
 	}
 
-	if msg.Amount.Int.IsNil() || msg.Amount.Int.IsNegative() {
+	if msg.Amount.IsNil() || msg.Amount.IsNegative() {
 		return errorsmod.Wrap(sdkerrors.ErrInvalidRequest, "amount cannot be empty or negative")
 	}
 
-	if msg.OperatorFeeShare.Dec.IsNil() || msg.OperatorFeeShare.Dec.IsNegative() {
+	if msg.OperatorFeeShare.IsNil() || msg.OperatorFeeShare.IsNegative() {
 		return errorsmod.Wrap(sdkerrors.ErrInvalidRequest, "operator fee share cannot be empty or negative")
 	}
 
-	if msg.OperatorFeeShare.Dec.GT(sdk.OneDec()) {
+	if msg.OperatorFeeShare.GT(math.LegacyOneDec()) {
 		return errorsmod.Wrap(sdkerrors.ErrInvalidRequest, "operator fee share cannot be greater than 1")
 	}
 
