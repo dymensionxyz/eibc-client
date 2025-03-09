@@ -7,6 +7,8 @@ import (
 	"math/rand"
 	"time"
 
+	math "cosmossdk.io/math"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/bech32"
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
@@ -44,7 +46,7 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 		return nil, fmt.Errorf("failed to create full node clients: %w", err)
 	}
 
-	minOperatorFeeShare, err := sdk.NewDecFromStr(cfg.Operator.MinFeeShare)
+	minOperatorFeeShare, err := math.LegacyNewDecFromStr(cfg.Operator.MinFeeShare)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse min operator fee share: %w", err)
 	}
@@ -65,7 +67,7 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 			processedCh,
 			cfg.OrderPolling.Interval, // we can use the same interval for order polling and LP balance checking
 			cfg.Validation.Interval,
-			nil, // set below
+			func() {},
 			logger,
 		),
 		logger: logger,
