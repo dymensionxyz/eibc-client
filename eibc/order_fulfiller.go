@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -113,17 +114,21 @@ func (ol *orderFulfiller) processBatch(orders []*demandOrder) error {
 
 	slices.Chunk(orders, ol.maxOrdersPerTx)(func(batch []*demandOrder) bool {
 		if err := ol.FulfillDemandOrders(batch...); err != nil {
-			for _, order := range batch {
-				idsFail = append(idsFail, order.id)
+			if isGasError(err) {
+				ol.logger.Fatal("failed to fulfill demand order", zap.Error(err))
+			}
+			if !isRPCError(err) {
+				for _, order := range batch {
+					idsFail = append(idsFail, order.id)
 
-				jsn, _ := json.Marshal(&hashableOrder{ID: order.id, Fee: order.fee})
-				failResults = append(failResults, orderFulfillResult{
-					orderID:         order.id,
-					failedOrderHash: fmt.Sprintf("%x", sha256.Sum256(jsn)),
-				})
-
-				if !slices.Contains(lpsDone, order.lpAddress) {
-					lpsDone = append(lpsDone, order.lpAddress)
+					jsn, _ := json.Marshal(&hashableOrder{ID: order.id, Fee: order.fee})
+					failResults = append(failResults, orderFulfillResult{
+						orderID:         order.id,
+						failedOrderHash: fmt.Sprintf("%x", sha256.Sum256(jsn)),
+					})
+					if !slices.Contains(lpsDone, order.lpAddress) {
+						lpsDone = append(lpsDone, order.lpAddress)
+					}
 				}
 			}
 			ol.releaseAllReservedOrdersFunds(batch...)
@@ -151,6 +156,30 @@ func (ol *orderFulfiller) processBatch(orders []*demandOrder) error {
 	ol.processedCh <- failResults
 
 	return nil
+}
+
+func isRPCError(err error) bool {
+	if err != nil && strings.Contains(err.Error(), "RPC error") {
+		return true
+	}
+	return false
+}
+
+func isGasError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errorMessage := err.Error()
+	if strings.Contains(errorMessage, "out of gas") {
+		return true
+	}
+
+	if strings.Contains(errorMessage, "insufficient funds") {
+		return true
+	}
+
+	return false
 }
 
 /*
@@ -232,7 +261,7 @@ func (ol *orderFulfiller) fulfillAuthorizedDemandOrders(demandOrder ...*demandOr
 						} else {
 							theErr = attr.Value
 						}
-						return fmt.Errorf("proposal execution failed: %s", theErr)
+						return errors.New(theErr)
 					}
 				}
 			}

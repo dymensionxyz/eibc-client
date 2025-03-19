@@ -301,18 +301,7 @@ func (p *orderPoller) getRollappDemandOrdersFromRPC(ctx context.Context, rollapp
 			continue
 		}
 
-		var proofHeight uint64
-
-		proofHeightEndian := strings.Split(order.TrackingPacketKey, "/")[2]
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					p.logger.Error("failed to parse proof height", zap.String("proof_height", proofHeightEndian), zap.String("order_id", order.Id))
-				}
-			}()
-
-			proofHeight = sdk.BigEndianToUint64([]byte(proofHeightEndian))
-		}()
+		proofHeight := p.parseProofHeight(order.TrackingPacketKey, order.Id)
 
 		if proofHeight > 0 && proofHeight <= lastFinalizedHeight {
 			continue
@@ -330,6 +319,18 @@ func (p *orderPoller) getRollappDemandOrdersFromRPC(ctx context.Context, rollapp
 	}
 
 	return orders, nil
+}
+
+func (p *orderPoller) parseProofHeight(trackingKey, orderId string) uint64 {
+	proofHeightEndian := strings.Split(trackingKey, "/")[2]
+
+	defer func() {
+		if r := recover(); r != nil {
+			p.logger.Debug("failed to parse proof height", zap.String("proof_height", proofHeightEndian), zap.String("order_id", orderId))
+		}
+	}()
+
+	return sdk.BigEndianToUint64([]byte(proofHeightEndian))
 }
 
 func (p *orderPoller) getRollappDemandOrdersFromIndexer(ctx context.Context, rollappId string) ([]Order, error) {
