@@ -20,9 +20,10 @@ type orderClient struct {
 	config     config.Config
 	fulfillers map[string]*orderFulfiller
 
-	orderEventer *orderEventer
-	orderPoller  *orderPoller
-	orderTracker *orderTracker
+	orderEventer   *orderEventer
+	orderPoller    *orderPoller
+	orderTracker   *orderTracker
+	orderFinalizer *orderFinalizer
 }
 
 func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error) {
@@ -49,49 +50,28 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 		return nil, fmt.Errorf("failed to parse min operator fee share: %w", err)
 	}
 
-	oc := &orderClient{
-		config:     cfg,
-		fulfillers: make(map[string]*orderFulfiller),
-		orderTracker: newOrderTracker(
-			hubClient,
-			cfg.Fulfillers.PolicyAddress,
-			minOperatorFeeShare,
-			fullNodeClient,
-			subscriberID,
-			cfg.Fulfillers.Scale,
-			cfg.Fulfillers.MaxOrdersPerTx,
-			&cfg.Validation,
-			orderCh,
-			processedCh,
-			cfg.OrderPolling.Interval, // we can use the same interval for order polling and LP balance checking
-			cfg.Validation.Interval,
-			nil, // set below
-			logger,
-		),
-		logger: logger,
-	}
-
-	if cfg.OrderPolling.Enabled {
-		var rollapps []string
-		for r, _ := range cfg.Rollapps {
-			rollapps = append(rollapps, r)
-		}
-		oc.orderPoller = newOrderPoller(
-			hubClient.Context(),
-			oc.orderTracker,
-			cfg.OrderPolling,
-			rollapps,
-			logger,
-		)
-		oc.orderTracker.resetPoller = oc.orderPoller.resetOrderPolling
-	}
-
-	oc.orderEventer = newOrderEventer(
+	tracker := newOrderTracker(
 		hubClient,
+		cfg.Fulfillers.PolicyAddress,
+		minOperatorFeeShare,
+		fullNodeClient,
 		subscriberID,
-		oc.orderTracker,
+		cfg.Fulfillers.Scale,
+		cfg.Fulfillers.MaxOrdersPerTx,
+		&cfg.Validation,
+		orderCh,
+		processedCh,
+		cfg.OrderPolling.Interval, // we can use the same interval for order polling and LP balance checking
+		cfg.Validation.Interval,
+		func() {},
 		logger,
 	)
+	oc := &orderClient{
+		config:       cfg,
+		fulfillers:   make(map[string]*orderFulfiller),
+		orderTracker: tracker,
+		logger:       logger,
+	}
 
 	operatorClientCfg := config.ClientConfig{
 		HomeDir:        cfg.Operator.KeyringDir,
@@ -111,6 +91,29 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get operator address: %w", err)
 	}
+
+	if cfg.OrderPolling.Enabled {
+		var rollapps []string
+		for r, _ := range cfg.Rollapps {
+			rollapps = append(rollapps, r)
+		}
+		oc.orderPoller = newOrderPoller(
+			hubClient.Context(),
+			oc.orderTracker,
+			cfg.OrderPolling,
+			rollapps,
+			operatorAddress.String(),
+			logger,
+		)
+		oc.orderTracker.resetPoller = oc.orderPoller.resetOrderPolling
+	}
+
+	oc.orderEventer = newOrderEventer(
+		hubClient,
+		subscriberID,
+		oc.orderTracker,
+		logger,
+	)
 
 	fulfillerClientCfg := config.ClientConfig{
 		HomeDir:        cfg.Fulfillers.KeyringDir,
@@ -195,6 +198,13 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 	if err != nil {
 		return nil, err
 	}
+
+	oc.orderFinalizer = newFinalizer(
+		operatorName,
+		operatorAddress.String(),
+		oc.orderPoller,
+		operatorClient,
+	)
 
 	return oc, nil
 }
@@ -286,6 +296,10 @@ func (oc *orderClient) Start(ctx context.Context) error {
 				oc.logger.Error("failed to start fulfiller", zap.Error(err))
 			}
 		}(b)
+	}
+
+	if err := oc.orderFinalizer.start(ctx); err != nil {
+		oc.logger.Error("failed to start orderFinalizer", zap.Error(err))
 	}
 
 	<-make(chan bool)

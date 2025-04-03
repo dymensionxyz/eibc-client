@@ -401,8 +401,6 @@ func Test_OrderFulfillment(t *testing.T) {
 		})
 	}
 
-	rollappWhitelist["rollapp1"] = struct{}{}
-
 	oc, err := setupTestOrderClient(
 		cfg,
 		mockGetPollerOrders(pollOrders),
@@ -442,7 +440,7 @@ func setupTestOrderClient(
 ) (*orderClient, error) {
 	logger, _ := zap.NewDevelopment()
 	orderCh := make(chan []*demandOrder, config.NewOrderBufferSize)
-	processedCh := make(chan []*demandOrder, config.NewOrderBufferSize)
+	processedCh := make(chan []orderFulfillResult, config.NewOrderBufferSize)
 
 	// tracker
 	trackerClient := hubClient
@@ -525,6 +523,7 @@ func setupTestOrderClient(
 			ordTracker,
 			cfg.OrderPolling,
 			rollapps,
+			"operator",
 			logger,
 		)
 		poller.getOrders = pollOrders

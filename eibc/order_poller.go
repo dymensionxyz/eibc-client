@@ -30,6 +30,7 @@ type orderPoller struct {
 	indexerClient   *http.Client
 	rollappClient   types.QueryClient
 	eibcOrderClient eibc.QueryClient
+	operatorAddr    string
 	logger          *zap.Logger
 
 	getOrders       func(ctx context.Context) ([]Order, error)
@@ -43,6 +44,7 @@ func newOrderPoller(
 	orderTracker *orderTracker,
 	pollingCfg config.OrderPollingConfig,
 	rollapps []string,
+	operatorAddr string,
 	logger *zap.Logger,
 ) *orderPoller {
 	o := &orderPoller{
@@ -55,6 +57,7 @@ func newOrderPoller(
 		rollappClient:   types.NewQueryClient(clientCtx),
 		eibcOrderClient: eibc.NewQueryClient(clientCtx),
 		indexerClient:   &http.Client{Timeout: 25 * time.Second},
+		operatorAddr:    operatorAddr,
 		noLPOrders:      make(map[string]struct{}),
 	}
 	o.getOrders = o.getDemandOrdersFromRPC
@@ -63,16 +66,19 @@ func newOrderPoller(
 
 const (
 	rollappOrdersQuery = `{"query": "{ibcTransferDetails(orderBy: TIME_ASC filter: {network: {equalTo: \"%s\"} status: { in: [EibcPending, Refunding] }, blockHeight: { greaterThan: \"%s\" }, rollappId: { equalTo: \"%s\"}, proofHeight: {greaterThan: \"%s\"}}) {nodes { eibcOrderId amount proofHeight blockHeight price rollappId eibcFee }}}"}`
+
+	claimableOrdersBatchSizeLimit = 10 // if this is higher, could run into insufficient fee error
 )
 
 type Order struct {
-	EibcOrderId string `json:"eibcOrderId"`
-	Amount      string `json:"amount"`
-	Price       string `json:"price"`
-	Fee         string `json:"eibcFee"`
-	RollappId   string `json:"rollappId"`
-	ProofHeight string `json:"proofHeight"`
-	BlockHeight string `json:"blockHeight"`
+	EibcOrderId       string `json:"eibcOrderId"`
+	Amount            string `json:"amount"`
+	Price             string `json:"price"`
+	Fee               string `json:"eibcFee"`
+	RollappId         string `json:"rollappId"`
+	ProofHeight       string `json:"proofHeight"`
+	BlockHeight       string `json:"blockHeight"`
+	TrackingPacketKey string `json:"trackingPacketKey"`
 }
 
 type ordersResponse struct {
@@ -269,6 +275,39 @@ func (p *orderPoller) getDemandOrdersFromRPC(ctx context.Context) ([]Order, erro
 	return orders, nil
 }
 
+func (p *orderPoller) getClaimableDemandOrdersFromRPC(ctx context.Context) ([]Order, error) {
+	var demandOrders []Order
+	for _, rollapp := range p.rollapps {
+		orders, err := p.getClaimableRollappDemandOrdersFromRPC(ctx, rollapp, eibc.RollappPacket_ON_RECV)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get claimable demand orders: %w", err)
+		}
+		demandOrders = append(demandOrders, orders...)
+
+		orders, err = p.getClaimableRollappDemandOrdersFromRPC(ctx, rollapp, eibc.RollappPacket_ON_TIMEOUT)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get claimable demand orders: %w", err)
+		}
+		demandOrders = append(demandOrders, orders...)
+
+		orders, err = p.getClaimableRollappDemandOrdersFromRPC(ctx, rollapp, eibc.RollappPacket_ON_ACK)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get claimable demand orders: %w", err)
+		}
+		demandOrders = append(demandOrders, orders...)
+	}
+
+	var orders []Order
+	for _, order := range demandOrders {
+		if _, ok := p.noLPOrders[order.EibcOrderId]; ok {
+			continue
+		}
+		orders = append(orders, order)
+	}
+
+	return orders, nil
+}
+
 func (p *orderPoller) getRollappDemandOrdersFromRPC(ctx context.Context, rollappId string, typ eibc.RollappPacket_Type) ([]Order, error) {
 	var lastFinalizedHeight uint64 = 0
 	lastHeightResp, err := p.rollappClient.LatestHeight(ctx, &types.QueryGetLatestHeightRequest{
@@ -315,6 +354,60 @@ func (p *orderPoller) getRollappDemandOrdersFromRPC(ctx context.Context, rollapp
 			RollappId:   order.RollappId,
 			ProofHeight: fmt.Sprint(proofHeight),
 			BlockHeight: "0",
+		})
+	}
+
+	return orders, nil
+}
+
+func (p *orderPoller) getClaimableRollappDemandOrdersFromRPC(ctx context.Context, rollappId string, typ eibc.RollappPacket_Type) ([]Order, error) {
+	var lastFinalizedHeight uint64 = 0
+	lastHeightResp, err := p.rollappClient.LatestHeight(ctx, &types.QueryGetLatestHeightRequest{
+		RollappId: rollappId,
+		Finalized: true,
+	})
+	if err == nil {
+		lastFinalizedHeight = lastHeightResp.Height
+	}
+
+	resp, err := p.eibcOrderClient.DemandOrdersByStatus(ctx, &eibc.QueryDemandOrdersByStatusRequest{
+		Status:           eibc.Status_PENDING,
+		Type:             typ,
+		RollappId:        rollappId,
+		FulfillmentState: eibc.FulfillmentState_FULFILLED,
+		Pagination: &query.PageRequest{
+			Limit: claimableOrdersBatchSizeLimit,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get fulfilled demand orders: %w", err)
+	}
+
+	var orders []Order
+	for _, order := range resp.DemandOrders {
+		if p.operatorAddr != order.FulfillerAddress {
+			continue
+		}
+
+		if order.Fee == nil || order.Fee.IsAnyNil() || !order.Fee.IsAllPositive() {
+			continue
+		}
+
+		proofHeight := p.parseProofHeight(order.TrackingPacketKey, order.Id)
+
+		if proofHeight > 0 && lastFinalizedHeight < proofHeight {
+			continue
+		}
+
+		orders = append(orders, Order{
+			EibcOrderId:       order.Id,
+			Amount:            order.Price[0].Amount.Add(order.Fee[0].Amount).String(),
+			Price:             order.Price[0].Amount.String(),
+			Fee:               order.Fee[0].String(),
+			RollappId:         order.RollappId,
+			ProofHeight:       fmt.Sprint(proofHeight),
+			BlockHeight:       "0",
+			TrackingPacketKey: order.TrackingPacketKey,
 		})
 	}
 
