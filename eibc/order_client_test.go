@@ -82,7 +82,8 @@ func TestOrderClient(t *testing.T) {
 								MaxPrice:         sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210)), sdk.NewCoin("adym", sdk.NewInt(150))),
 								SpendLimit:       sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210)), sdk.NewCoin("adym", sdk.NewInt(150))),
 								OperatorFeeShare: math.LegacyMustNewDecFromStr("0.1"),
-							}},
+							},
+						},
 					},
 					balance: sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(201)), sdk.NewCoin("adym", sdk.NewInt(140))),
 				}, {
@@ -516,7 +517,7 @@ func setupTestOrderClient(
 	var poller *orderPoller
 	if cfg.OrderPolling.Enabled {
 		var rollapps []string
-		for r, _ := range cfg.Rollapps {
+		for r := range cfg.Rollapps {
 			rollapps = append(rollapps, r)
 		}
 		poller = newOrderPoller(

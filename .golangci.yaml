@@ -1,73 +1,78 @@
+version: "2"
+
 run:
   concurrency: 4
   timeout: 5m
   tests: true
   modules-download-mode: readonly
-  go: "1.22.2"
+
 output:
-  # Format: colored-line-number|line-number|json|colored-tab|tab|checkstyle|code-climate|junit-xml|github-actions|teamcity
-  #
-  # Multiple can be specified by separating them by comma, output can be provided
-  # for each of them by separating format name and path by colon symbol.
-  # Output path can be either `stdout`, `stderr` or path to the file to write to.
-  # Example: "checkstyle:report.xml,json:stdout,colored-line-number"
-  #
-  # Default: colored-line-number
-  format: colored-line-number
-  # Print lines of code with issue.
-  # Default: true
-  print-issued-lines: true
-  # Print linter name in the end of issue text.
-  # Default: true
-  print-linter-name: true
-  # Make issues output unique by line.
-  # Default: true
-  uniq-by-line: true
-  # Add a prefix to the output file references.
-  # Default: ""
+  formats:
+    text:
+      colors: true
+      path: stdout
+      print-issued-lines: true
+      print-linter-name: true
   path-prefix: ""
-  # Sort results by: filepath, line and column.
-  # Default: false
-  sort-results: true
+  sort-order:
+    - file
+    - severity
+    - linter
+
 linters:
-  disable-all: true
+  default: none
   enable:
     - errcheck
     - gocyclo
-    - gofmt
-    - gofumpt
-    - goimports
     - gosec
-    - gosimple
     - govet
     - ineffassign
     - misspell
     - revive
     - staticcheck
-    - typecheck
     - unconvert
     - unused
-issues:
-  exclude-use-default: false
-  exclude:
-    - "^.*SA1019.*$" # Excluding SA1019 errors
-linters-settings:
-  go-version-checker:
-    min-version: "1.22.2"
-  revive:
+    - errorlint
+  exclusions:
     rules:
-      - name: exported
-        severity: warning
-        disabled: true
-  errcheck:
-    check-type-assertions: true
-  gosec:
-    exclude-generated: false
-    excludes:
-      - G204
-      - G301
-      - G304
-      - G306
-      - G307
-    severity: low
-    confidence: low
+      - linters:
+          - gosec
+          - gocyclo
+          - unconvert
+        path: ".*\\.pb\\.go$"
+      - linters:
+          - staticcheck
+        text: "^.*SA1019.*$"
+      - linters:
+          - errcheck
+        text: "^.*value of .*it.*Close.* is not checked"
+      - linters:
+          - gosec
+        text: "^.*G115.*$"
+        path: ".*_test\\.go$"
+  settings:
+    revive:
+      rules:
+        - name: exported
+          severity: warning
+          disabled: true
+    errcheck:
+      check-type-assertions: true
+    gosec:
+      exclude-generated: true
+      excludes:
+        - G204
+        - G301
+        - G304
+        - G306
+        - G307
+      severity: low
+      confidence: low
+
+issues:
+  uniq-by-line: true
+
+formatters:
+  enable:
+    - goimports
+    - gofumpt
