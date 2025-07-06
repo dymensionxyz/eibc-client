@@ -96,7 +96,7 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 
 	if cfg.OrderPolling.Enabled {
 		var rollapps []string
-		for r, _ := range cfg.Rollapps {
+		for r := range cfg.Rollapps {
 			rollapps = append(rollapps, r)
 		}
 		oc.orderPoller = newOrderPoller(

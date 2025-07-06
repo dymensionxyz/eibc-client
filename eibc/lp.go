@@ -169,7 +169,7 @@ func (or *orderTracker) loadLPs(ctx context.Context) error {
 				continue
 			}
 			// check the operator fee is the minimum for what the operator wants
-			if rollapp.OperatorFeeShare.LT(or.minOperatorFeeShare) {
+			if rollapp.OperatorFeeShare.Dec.LT(or.minOperatorFeeShare) {
 				or.logger.Debug("operator fee share too low", zap.String("rollapp", rollapp.RollappId))
 				continue
 			}
@@ -183,8 +183,8 @@ func (or *orderTracker) loadLPs(ctx context.Context) error {
 				Denoms:              denoms,
 				MaxPrice:            rollapp.MaxPrice,
 				spendLimit:          rollapp.SpendLimit,
-				MinFeePercentage:    rollapp.MinFeePercentage,
-				OperatorFeeShare:    rollapp.OperatorFeeShare,
+				MinFeePercentage:    rollapp.MinFeePercentage.Dec,
+				OperatorFeeShare:    rollapp.OperatorFeeShare.Dec,
 				SettlementValidated: rollapp.SettlementValidated,
 			}
 			if existLP {

@@ -11,7 +11,7 @@ type demandOrder struct {
 	id                  string
 	denom               string
 	price               sdk.Coins
-	amount              sdk.Int
+	amount              math.Int
 	fee                 sdk.Coin
 	rollappId           string
 	proofHeight         int64
