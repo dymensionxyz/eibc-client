@@ -59,7 +59,6 @@ linters:
     errcheck:
       check-type-assertions: true
     gosec:
-      exclude-generated: true
       excludes:
         - G204
         - G301
