@@ -165,7 +165,7 @@ func (c *nodeClient) getHttp(ctx context.Context, url string) (*blockValidatedRe
 	if err != nil {
 		return nil, fmt.Errorf("failed to get %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	jsonResp := new(JSONResponse)
 	if err := json.NewDecoder(resp.Body).Decode(&jsonResp); err != nil {

@@ -163,17 +163,14 @@ func (or *orderTracker) checkOrders() {
 }
 
 func (or *orderTracker) manageProcessed() {
-	for {
-		select {
-		case orders := <-or.processedOrdersCh:
-			for _, orderRes := range orders {
-				if orderRes.failedOrderHash != "" {
-					or.fohmu.Lock()
-					or.failedOrderHashes[orderRes.orderID] = orderRes.failedOrderHash
-					or.fohmu.Unlock()
-				}
-				or.pool.removeOrder(orderRes.orderID)
+	for orders := range or.processedOrdersCh {
+		for _, orderRes := range orders {
+			if orderRes.failedOrderHash != "" {
+				or.fohmu.Lock()
+				or.failedOrderHashes[orderRes.orderID] = orderRes.failedOrderHash
+				or.fohmu.Unlock()
 			}
+			or.pool.removeOrder(orderRes.orderID)
 		}
 	}
 }
