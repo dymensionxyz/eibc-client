@@ -254,7 +254,7 @@ func accountExists(clientCtx client.Context, address string) (bool, error) {
 	// Parse the address
 	addr, err := sdk.AccAddressFromBech32(address)
 	if err != nil {
-		return false, fmt.Errorf("invalid address: %v", err)
+		return false, fmt.Errorf("invalid address: %w", err)
 	}
 
 	// Create a query client for the auth module
@@ -274,7 +274,7 @@ func accountExists(clientCtx client.Context, address string) (bool, error) {
 		if grpcErrorCode(err) == "NotFound" {
 			return false, nil
 		}
-		return false, fmt.Errorf("failed to query account: %v", err)
+		return false, fmt.Errorf("failed to query account: %w", err)
 	}
 
 	// If res.Account is not nil, account exists

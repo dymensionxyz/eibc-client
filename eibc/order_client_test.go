@@ -82,7 +82,8 @@ func TestOrderClient(t *testing.T) {
 								MaxPrice:         sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210)), sdk.NewCoin("adym", sdk.NewInt(150))),
 								SpendLimit:       sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210)), sdk.NewCoin("adym", sdk.NewInt(150))),
 								OperatorFeeShare: types.DecProto{Dec: math.LegacyMustNewDecFromStr("0.1")},
-							}},
+							},
+						},
 					},
 					balance: sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(201)), sdk.NewCoin("adym", sdk.NewInt(140))),
 				}, {

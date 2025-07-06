@@ -20,9 +20,11 @@ import (
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
-var _ = proto.Marshal
-var _ = fmt.Errorf
-var _ = math.Inf
+var (
+	_ = proto.Marshal
+	_ = fmt.Errorf
+	_ = math.Inf
+)
 
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the proto package it is being compiled against.
@@ -112,9 +114,11 @@ func (*MsgSubmitProposal) ProtoMessage()    {}
 func (*MsgSubmitProposal) Descriptor() ([]byte, []int) {
 	return fileDescriptor_6b8d3d629f136420, []int{18}
 }
+
 func (m *MsgSubmitProposal) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
+
 func (m *MsgSubmitProposal) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
 		return xxx_messageInfo_MsgSubmitProposal.Marshal(b, m, deterministic)
@@ -127,12 +131,15 @@ func (m *MsgSubmitProposal) XXX_Marshal(b []byte, deterministic bool) ([]byte, e
 		return b[:n], nil
 	}
 }
+
 func (m *MsgSubmitProposal) XXX_Merge(src proto.Message) {
 	xxx_messageInfo_MsgSubmitProposal.Merge(m, src)
 }
+
 func (m *MsgSubmitProposal) XXX_Size() int {
 	return m.Size()
 }
+
 func (m *MsgSubmitProposal) XXX_DiscardUnknown() {
 	xxx_messageInfo_MsgSubmitProposal.DiscardUnknown(m)
 }
@@ -151,9 +158,11 @@ func (*MsgSubmitProposalResponse) ProtoMessage()    {}
 func (*MsgSubmitProposalResponse) Descriptor() ([]byte, []int) {
 	return fileDescriptor_6b8d3d629f136420, []int{19}
 }
+
 func (m *MsgSubmitProposalResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
+
 func (m *MsgSubmitProposalResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
 		return xxx_messageInfo_MsgSubmitProposalResponse.Marshal(b, m, deterministic)
@@ -166,12 +175,15 @@ func (m *MsgSubmitProposalResponse) XXX_Marshal(b []byte, deterministic bool) ([
 		return b[:n], nil
 	}
 }
+
 func (m *MsgSubmitProposalResponse) XXX_Merge(src proto.Message) {
 	xxx_messageInfo_MsgSubmitProposalResponse.Merge(m, src)
 }
+
 func (m *MsgSubmitProposalResponse) XXX_Size() int {
 	return m.Size()
 }
+
 func (m *MsgSubmitProposalResponse) XXX_DiscardUnknown() {
 	xxx_messageInfo_MsgSubmitProposalResponse.DiscardUnknown(m)
 }
@@ -410,8 +422,10 @@ var fileDescriptor_6b8d3d629f136420 = []byte{
 }
 
 // Reference imports to suppress errors if they are not otherwise used.
-var _ context.Context
-var _ grpc.ClientConn
+var (
+	_ context.Context
+	_ grpc.ClientConn
+)
 
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
@@ -839,6 +853,7 @@ func (m *MsgSubmitProposal) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
+
 func (m *MsgSubmitProposalResponse) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
