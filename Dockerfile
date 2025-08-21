@@ -1,4 +1,4 @@
-FROM golang:1.22
+FROM golang:1.23
 
 WORKDIR /app
 
@@ -10,6 +10,4 @@ COPY . .
 
 # Build the Go app
 RUN go build -o eibc-client .
-
-# Command to run the executable
-CMD ["./eibc-client", "start"]
+RUN cp /app/eibc-client /usr/local/bin/eibc-client
