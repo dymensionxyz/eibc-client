@@ -13,20 +13,31 @@ import (
 )
 
 type orderFinalizer struct {
-	accountName string
-	accountAddr string
-	p           *orderPoller
-	client      cosmosClient
-	logger      *zap.Logger
+	accountName  string
+	accountAddr  string
+	queryService *queryService
+	client       cosmosClient
+	rollapps     []string
+	interval     time.Duration
+	logger       *zap.Logger
 }
 
-func newFinalizer(accountName string, accountAddr string, p *orderPoller, cClient cosmosClient) *orderFinalizer {
+func newFinalizer(
+	accountName, accountAddr string,
+	queryService *queryService,
+	cClient cosmosClient,
+	rollapps []string,
+	interval time.Duration,
+	logger *zap.Logger,
+) *orderFinalizer {
 	return &orderFinalizer{
-		accountName: accountName,
-		accountAddr: accountAddr,
-		p:           p,
-		client:      cClient,
-		logger:      p.logger,
+		accountName:  accountName,
+		accountAddr:  accountAddr,
+		queryService: queryService,
+		client:       cClient,
+		rollapps:     rollapps,
+		interval:     interval,
+		logger:       logger.With(zap.String("module", "order-finalizer")),
 	}
 }
 
@@ -36,7 +47,7 @@ func (f *orderFinalizer) start(ctx context.Context) error {
 	}
 
 	go func() {
-		for c := time.Tick(f.p.interval); ; <-c {
+		for c := time.Tick(f.interval); ; <-c {
 			select {
 			case <-ctx.Done():
 				return
@@ -52,9 +63,9 @@ func (f *orderFinalizer) start(ctx context.Context) error {
 }
 
 func (f *orderFinalizer) finalizeClaimableOrders(ctx context.Context) error {
-	claimableOrders, err := f.p.getClaimableDemandOrdersFromRPC(ctx)
+	claimableOrders, err := f.queryService.getClaimableDemandOrders(ctx, f.rollapps, f.accountAddr)
 	if err != nil {
-		return fmt.Errorf("could not get claimable demand orders from RPC: %w", err)
+		return fmt.Errorf("could not get claimable demand orders: %w", err)
 	}
 
 	if len(claimableOrders) == 0 {

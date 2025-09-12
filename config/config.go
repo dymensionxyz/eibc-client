@@ -11,10 +11,11 @@ import (
 )
 
 type Config struct {
-	NodeAddress  string                   `mapstructure:"node_address"`
-	Gas          GasConfig                `mapstructure:"gas"`
-	OrderPolling OrderPollingConfig       `mapstructure:"order_polling"`
-	Rollapps     map[string]RollappConfig `mapstructure:"rollapps"`
+	NodeAddress       string                   `mapstructure:"node_address"`
+	Gas               GasConfig                `mapstructure:"gas"`
+	OrderPolling      OrderPollingConfig       `mapstructure:"order_polling"`
+	OrderFinalization OrderFinalizationConfig  `mapstructure:"order_finalization"`
+	Rollapps          map[string]RollappConfig `mapstructure:"rollapps"`
 
 	Operator   OperatorConfig   `mapstructure:"operator"`
 	Fulfillers FulfillerConfig  `mapstructure:"fulfillers"`
@@ -27,6 +28,11 @@ type OrderPollingConfig struct {
 	IndexerURL string        `mapstructure:"indexer_url"`
 	Interval   time.Duration `mapstructure:"interval"`
 	Enabled    bool          `mapstructure:"enabled"`
+}
+
+type OrderFinalizationConfig struct {
+	Enabled  bool          `mapstructure:"enabled"`
+	Interval time.Duration `mapstructure:"interval"`
 }
 
 type GasConfig struct {
@@ -71,17 +77,18 @@ const (
 	defaultGasFees     = "3000000000000000" + defaultHubDenom
 	testKeyringBackend = "test"
 
-	FulfillerNamePrefix            = "bot-"
-	defaultOperatorAccountName     = "client"
-	defaultOperatorGroupID         = 1
-	defaultOperatorMinFeeShare     = 0.1
-	defaultFulfillerScale          = 30
-	NewOrderBufferSize             = 100
-	defaultMaxOrdersPerTx          = 1
-	defaultOrderRefreshInterval    = 30 * time.Second
-	defaultValidationFallbackLevel = "p2p"
-	defaultValidationWaitTime      = "61m"
-	defaultOrderValidationInterval = "5m"
+	FulfillerNamePrefix              = "bot-"
+	defaultOperatorAccountName       = "client"
+	defaultOperatorGroupID           = 1
+	defaultOperatorMinFeeShare       = 0.1
+	defaultFulfillerScale            = 30
+	NewOrderBufferSize               = 100
+	defaultMaxOrdersPerTx            = 1
+	defaultOrderRefreshInterval      = 30 * time.Second
+	defaultOrderFinalizationInterval = 30 * time.Second
+	defaultValidationFallbackLevel   = "p2p"
+	defaultValidationWaitTime        = "61m"
+	defaultOrderValidationInterval   = "5m"
 )
 
 type ValidationLevel string
@@ -111,6 +118,9 @@ func InitConfig() {
 	viper.SetDefault("order_polling.interval", "<indexer_url>")
 	viper.SetDefault("order_polling.interval", defaultOrderRefreshInterval)
 	viper.SetDefault("order_polling.enabled", false)
+
+	viper.SetDefault("order_finalization.enabled", true)
+	viper.SetDefault("order_finalization.interval", defaultOrderFinalizationInterval)
 
 	viper.SetDefault("gas.fees", defaultGasFees)
 

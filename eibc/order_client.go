@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"cosmossdk.io/math"
-
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/bech32"
 	"github.com/dymensionxyz/cosmosclient/cosmosclient"
@@ -94,13 +93,17 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 		return nil, fmt.Errorf("failed to get operator address: %w", err)
 	}
 
+	var rollapps []string
+	for r := range cfg.Rollapps {
+		rollapps = append(rollapps, r)
+	}
+
+	queryService := newQueryService(hubClient.Context(), logger)
+
 	if cfg.OrderPolling.Enabled {
-		var rollapps []string
-		for r := range cfg.Rollapps {
-			rollapps = append(rollapps, r)
-		}
 		oc.orderPoller = newOrderPoller(
 			hubClient.Context(),
+			queryService,
 			oc.orderTracker,
 			cfg.OrderPolling,
 			rollapps,
@@ -160,7 +163,11 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 
 		cClient, err := cosmosclient.New(config.GetCosmosClientOptions(fulfillerClientCfg)...)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create cosmos client for fulfiller: %s;err: %w", acc.Name, err)
+			return nil, fmt.Errorf(
+				"failed to create cosmos client for fulfiller: %s;err: %w",
+				acc.Name,
+				err,
+			)
 		}
 
 		f, err := newOrderFulfiller(
@@ -196,17 +203,28 @@ func NewOrderClient(cfg config.Config, logger *zap.Logger) (*orderClient, error)
 		}
 	}
 
-	err = addFulfillersToGroup(operatorName, operatorAddress.String(), cfg.Operator.GroupID, operatorClient, activeAccs)
+	err = addFulfillersToGroup(
+		operatorName,
+		operatorAddress.String(),
+		cfg.Operator.GroupID,
+		operatorClient,
+		activeAccs,
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	oc.orderFinalizer = newFinalizer(
-		operatorName,
-		operatorAddress.String(),
-		oc.orderPoller,
-		operatorClient,
-	)
+	if cfg.OrderFinalization.Enabled {
+		oc.orderFinalizer = newFinalizer(
+			operatorName,
+			operatorAddress.String(),
+			queryService,
+			operatorClient,
+			rollapps,
+			cfg.OrderFinalization.Interval,
+			logger,
+		)
+	}
 
 	return oc, nil
 }
@@ -235,7 +253,10 @@ func getHubClient(cfg config.Config) (hubClient cosmosclient.Client, err error) 
 		return retryErr
 	})
 	if err != nil {
-		return cosmosclient.Client{}, fmt.Errorf("failed to create cosmos client after retries: %w", err)
+		return cosmosclient.Client{}, fmt.Errorf(
+			"failed to create cosmos client after retries: %w",
+			err,
+		)
 	}
 
 	return hubClient, nil
@@ -300,8 +321,10 @@ func (oc *orderClient) Start(ctx context.Context) error {
 		}(b)
 	}
 
-	if err := oc.orderFinalizer.start(ctx); err != nil {
-		oc.logger.Error("failed to start orderFinalizer", zap.Error(err))
+	if oc.orderFinalizer != nil {
+		if err := oc.orderFinalizer.start(ctx); err != nil {
+			oc.logger.Error("failed to start orderFinalizer", zap.Error(err))
+		}
 	}
 
 	<-make(chan bool)

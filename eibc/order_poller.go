@@ -30,6 +30,7 @@ type orderPoller struct {
 	indexerClient   *http.Client
 	rollappClient   types.QueryClient
 	eibcOrderClient eibc.QueryClient
+	queryService    *queryService
 	operatorAddr    string
 	logger          *zap.Logger
 
@@ -41,6 +42,7 @@ type orderPoller struct {
 
 func newOrderPoller(
 	clientCtx client.Context,
+	queryService *queryService,
 	orderTracker *orderTracker,
 	pollingCfg config.OrderPollingConfig,
 	rollapps []string,
@@ -56,18 +58,23 @@ func newOrderPoller(
 		orderTracker:    orderTracker,
 		rollappClient:   types.NewQueryClient(clientCtx),
 		eibcOrderClient: eibc.NewQueryClient(clientCtx),
+		queryService:    queryService,
 		indexerClient:   &http.Client{Timeout: 25 * time.Second},
 		operatorAddr:    operatorAddr,
 		noLPOrders:      make(map[string]struct{}),
 	}
-	o.getOrders = o.getDemandOrdersFromRPC
+
+	if o.indexerURL != "" {
+		o.getOrders = o.getDemandOrdersFromIndexer
+	} else {
+		o.getOrders = o.getDemandOrdersFromRPC
+	}
+
 	return o
 }
 
 const (
 	rollappOrdersQuery = `{"query": "{ibcTransferDetails(orderBy: TIME_ASC filter: {network: {equalTo: \"%s\"} status: { in: [EibcPending, Refunding] }, blockHeight: { greaterThan: \"%s\" }, rollappId: { equalTo: \"%s\"}, proofHeight: {greaterThan: \"%s\"}}) {nodes { eibcOrderId amount proofHeight blockHeight price rollappId eibcFee }}}"}`
-
-	claimableOrdersBatchSizeLimit = 10 // if this is higher, could run into insufficient fee error
 )
 
 type Order struct {
@@ -141,7 +148,11 @@ func (p *orderPoller) pollPendingDemandOrders(ctx context.Context) error {
 		}
 		rollaps = append(rollaps, order.rollappId)
 	}
-	p.logger.Info("new demand orders", zap.Int("count", len(newOrders)), zap.Strings("rollapps", rollaps))
+	p.logger.Info(
+		"new demand orders",
+		zap.Int("count", len(newOrders)),
+		zap.Strings("rollapps", rollaps),
+	)
 
 	p.orderTracker.trackOrders(newOrders...)
 
@@ -215,7 +226,11 @@ func (p *orderPoller) convertOrders(demandOrders []Order) (orders []*demandOrder
 		}
 
 		if err := p.orderTracker.findLPForOrder(newOrder); err != nil {
-			p.logger.Debug("failed to find LP for order", zap.Error(err), zap.String("order_id", newOrder.id))
+			p.logger.Debug(
+				"failed to find LP for order",
+				zap.Error(err),
+				zap.String("order_id", newOrder.id),
+			)
 			p.noLPOrders[newOrder.id] = struct{}{}
 			continue
 		}
@@ -275,40 +290,11 @@ func (p *orderPoller) getDemandOrdersFromRPC(ctx context.Context) ([]Order, erro
 	return orders, nil
 }
 
-func (p *orderPoller) getClaimableDemandOrdersFromRPC(ctx context.Context) ([]Order, error) {
-	var demandOrders []Order
-	for _, rollapp := range p.rollapps {
-		orders, err := p.getClaimableRollappDemandOrdersFromRPC(ctx, rollapp, eibc.RollappPacket_ON_RECV)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get claimable demand orders: %w", err)
-		}
-		demandOrders = append(demandOrders, orders...)
-
-		orders, err = p.getClaimableRollappDemandOrdersFromRPC(ctx, rollapp, eibc.RollappPacket_ON_TIMEOUT)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get claimable demand orders: %w", err)
-		}
-		demandOrders = append(demandOrders, orders...)
-
-		orders, err = p.getClaimableRollappDemandOrdersFromRPC(ctx, rollapp, eibc.RollappPacket_ON_ACK)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get claimable demand orders: %w", err)
-		}
-		demandOrders = append(demandOrders, orders...)
-	}
-
-	var orders []Order
-	for _, order := range demandOrders {
-		if _, ok := p.noLPOrders[order.EibcOrderId]; ok {
-			continue
-		}
-		orders = append(orders, order)
-	}
-
-	return orders, nil
-}
-
-func (p *orderPoller) getRollappDemandOrdersFromRPC(ctx context.Context, rollappId string, typ eibc.RollappPacket_Type) ([]Order, error) {
+func (p *orderPoller) getRollappDemandOrdersFromRPC(
+	ctx context.Context,
+	rollappId string,
+	typ eibc.RollappPacket_Type,
+) ([]Order, error) {
 	var lastFinalizedHeight uint64 = 0
 	lastHeightResp, err := p.rollappClient.LatestHeight(ctx, &types.QueryGetLatestHeightRequest{
 		RollappId: rollappId,
@@ -360,73 +346,26 @@ func (p *orderPoller) getRollappDemandOrdersFromRPC(ctx context.Context, rollapp
 	return orders, nil
 }
 
-func (p *orderPoller) getClaimableRollappDemandOrdersFromRPC(ctx context.Context, rollappId string, typ eibc.RollappPacket_Type) ([]Order, error) {
-	var lastFinalizedHeight uint64 = 0
-	lastHeightResp, err := p.rollappClient.LatestHeight(ctx, &types.QueryGetLatestHeightRequest{
-		RollappId: rollappId,
-		Finalized: true,
-	})
-	if err == nil {
-		lastFinalizedHeight = lastHeightResp.Height
-	}
-
-	resp, err := p.eibcOrderClient.DemandOrdersByStatus(ctx, &eibc.QueryDemandOrdersByStatusRequest{
-		Status:           eibc.Status_PENDING,
-		Type:             typ,
-		RollappId:        rollappId,
-		FulfillmentState: eibc.FulfillmentState_FULFILLED,
-		Pagination: &query.PageRequest{
-			Limit: claimableOrdersBatchSizeLimit,
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get fulfilled demand orders: %w", err)
-	}
-
-	var orders []Order
-	for _, order := range resp.DemandOrders {
-		if p.operatorAddr != order.FulfillerAddress {
-			continue
-		}
-
-		if order.Fee == nil || order.Fee.IsAnyNil() || !order.Fee.IsAllPositive() {
-			continue
-		}
-
-		proofHeight := p.parseProofHeight(order.TrackingPacketKey, order.Id)
-
-		if proofHeight > 0 && lastFinalizedHeight < proofHeight {
-			continue
-		}
-
-		orders = append(orders, Order{
-			EibcOrderId:       order.Id,
-			Amount:            order.Price[0].Amount.Add(order.Fee[0].Amount).String(),
-			Price:             order.Price[0].Amount.String(),
-			Fee:               order.Fee[0].String(),
-			RollappId:         order.RollappId,
-			ProofHeight:       fmt.Sprint(proofHeight),
-			BlockHeight:       "0",
-			TrackingPacketKey: order.TrackingPacketKey,
-		})
-	}
-
-	return orders, nil
-}
-
 func (p *orderPoller) parseProofHeight(trackingKey, orderId string) uint64 {
 	proofHeightEndian := strings.Split(trackingKey, "/")[2]
 
 	defer func() {
 		if r := recover(); r != nil {
-			p.logger.Debug("failed to parse proof height", zap.String("proof_height", proofHeightEndian), zap.String("order_id", orderId))
+			p.logger.Debug(
+				"failed to parse proof height",
+				zap.String("proof_height", proofHeightEndian),
+				zap.String("order_id", orderId),
+			)
 		}
 	}()
 
 	return sdk.BigEndianToUint64([]byte(proofHeightEndian))
 }
 
-func (p *orderPoller) getRollappDemandOrdersFromIndexer(ctx context.Context, rollappId string) ([]Order, error) {
+func (p *orderPoller) getRollappDemandOrdersFromIndexer(
+	ctx context.Context,
+	rollappId string,
+) ([]Order, error) {
 	lastFinalizedHeight := "0"
 	lastHeightResp, err := p.rollappClient.LatestHeight(ctx, &types.QueryGetLatestHeightRequest{
 		RollappId: rollappId,
@@ -436,7 +375,13 @@ func (p *orderPoller) getRollappDemandOrdersFromIndexer(ctx context.Context, rol
 		lastFinalizedHeight = fmt.Sprint(lastHeightResp.Height)
 	}
 
-	queryStr := fmt.Sprintf(rollappOrdersQuery, p.chainID, fmt.Sprint(p.lastBlockHeight.Load()), rollappId, lastFinalizedHeight)
+	queryStr := fmt.Sprintf(
+		rollappOrdersQuery,
+		p.chainID,
+		fmt.Sprint(p.lastBlockHeight.Load()),
+		rollappId,
+		lastFinalizedHeight,
+	)
 	body := strings.NewReader(queryStr)
 
 	resp, err := p.indexerClient.Post(p.indexerURL, "application/json", body)

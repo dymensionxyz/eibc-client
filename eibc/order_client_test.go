@@ -68,33 +68,60 @@ func TestOrderClient(t *testing.T) {
 					grant: &types.FulfillOrderAuthorization{
 						Rollapps: []*types.RollappCriteria{
 							{
-								RollappId:           "rollapp1",
-								Denoms:              []string{"stake", "adym"},
-								MinFeePercentage:    types.DecProto{Dec: math.LegacyMustNewDecFromStr("0.1")},
-								MaxPrice:            sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210)), sdk.NewCoin("adym", sdk.NewInt(150))),
-								OperatorFeeShare:    types.DecProto{Dec: math.LegacyMustNewDecFromStr("0.1")},
-								SpendLimit:          sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210)), sdk.NewCoin("adym", sdk.NewInt(150))),
+								RollappId: "rollapp1",
+								Denoms:    []string{"stake", "adym"},
+								MinFeePercentage: types.DecProto{
+									Dec: math.LegacyMustNewDecFromStr("0.1"),
+								},
+								MaxPrice: sdk.NewCoins(
+									sdk.NewCoin("stake", sdk.NewInt(210)),
+									sdk.NewCoin("adym", sdk.NewInt(150)),
+								),
+								OperatorFeeShare: types.DecProto{
+									Dec: math.LegacyMustNewDecFromStr("0.1"),
+								},
+								SpendLimit: sdk.NewCoins(
+									sdk.NewCoin("stake", sdk.NewInt(210)),
+									sdk.NewCoin("adym", sdk.NewInt(150)),
+								),
 								SettlementValidated: false,
 							}, {
-								RollappId:        "rollapp2",
-								Denoms:           []string{"stake", "adym"},
-								MinFeePercentage: types.DecProto{Dec: math.LegacyMustNewDecFromStr("0.1")},
-								MaxPrice:         sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210)), sdk.NewCoin("adym", sdk.NewInt(150))),
-								SpendLimit:       sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210)), sdk.NewCoin("adym", sdk.NewInt(150))),
-								OperatorFeeShare: types.DecProto{Dec: math.LegacyMustNewDecFromStr("0.1")},
+								RollappId: "rollapp2",
+								Denoms:    []string{"stake", "adym"},
+								MinFeePercentage: types.DecProto{
+									Dec: math.LegacyMustNewDecFromStr("0.1"),
+								},
+								MaxPrice: sdk.NewCoins(
+									sdk.NewCoin("stake", sdk.NewInt(210)),
+									sdk.NewCoin("adym", sdk.NewInt(150)),
+								),
+								SpendLimit: sdk.NewCoins(
+									sdk.NewCoin("stake", sdk.NewInt(210)),
+									sdk.NewCoin("adym", sdk.NewInt(150)),
+								),
+								OperatorFeeShare: types.DecProto{
+									Dec: math.LegacyMustNewDecFromStr("0.1"),
+								},
 							},
 						},
 					},
-					balance: sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(201)), sdk.NewCoin("adym", sdk.NewInt(140))),
+					balance: sdk.NewCoins(
+						sdk.NewCoin("stake", sdk.NewInt(201)),
+						sdk.NewCoin("adym", sdk.NewInt(140)),
+					),
 				}, {
 					grant: &types.FulfillOrderAuthorization{
 						Rollapps: []*types.RollappCriteria{{
-							RollappId:           "rollapp2",
-							Denoms:              []string{"adym"},
-							MinFeePercentage:    types.DecProto{Dec: math.LegacyMustNewDecFromStr("0.1")},
-							MaxPrice:            sdk.NewCoins(sdk.NewCoin("adym", sdk.NewInt(450))),
-							SpendLimit:          sdk.NewCoins(sdk.NewCoin("adym", sdk.NewInt(450))),
-							OperatorFeeShare:    types.DecProto{Dec: math.LegacyMustNewDecFromStr("0.2")},
+							RollappId: "rollapp2",
+							Denoms:    []string{"adym"},
+							MinFeePercentage: types.DecProto{
+								Dec: math.LegacyMustNewDecFromStr("0.1"),
+							},
+							MaxPrice:   sdk.NewCoins(sdk.NewCoin("adym", sdk.NewInt(450))),
+							SpendLimit: sdk.NewCoins(sdk.NewCoin("adym", sdk.NewInt(450))),
+							OperatorFeeShare: types.DecProto{
+								Dec: math.LegacyMustNewDecFromStr("0.2"),
+							},
 							SettlementValidated: true,
 						}},
 					},
@@ -102,16 +129,27 @@ func TestOrderClient(t *testing.T) {
 				}, {
 					grant: &types.FulfillOrderAuthorization{
 						Rollapps: []*types.RollappCriteria{{
-							RollappId:           "rollapp1",
-							Denoms:              []string{"stake"},
-							MinFeePercentage:    types.DecProto{Dec: math.LegacyMustNewDecFromStr("0.1")},
-							MaxPrice:            sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(450))),
-							SpendLimit:          sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(450))),
-							OperatorFeeShare:    types.DecProto{Dec: math.LegacyMustNewDecFromStr("0.2")},
+							RollappId: "rollapp1",
+							Denoms:    []string{"stake"},
+							MinFeePercentage: types.DecProto{
+								Dec: math.LegacyMustNewDecFromStr("0.1"),
+							},
+							MaxPrice: sdk.NewCoins(
+								sdk.NewCoin("stake", sdk.NewInt(450)),
+							),
+							SpendLimit: sdk.NewCoins(
+								sdk.NewCoin("stake", sdk.NewInt(450)),
+							),
+							OperatorFeeShare: types.DecProto{
+								Dec: math.LegacyMustNewDecFromStr("0.2"),
+							},
 							SettlementValidated: false,
 						}},
 					},
-					balance: sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(200)), sdk.NewCoin("adym", sdk.NewInt(100))),
+					balance: sdk.NewCoins(
+						sdk.NewCoin("stake", sdk.NewInt(200)),
+						sdk.NewCoin("adym", sdk.NewInt(100)),
+					),
 				},
 			},
 			hubClient: mockNodeClient{},
@@ -314,10 +352,22 @@ func TestOrderClient(t *testing.T) {
 			}
 
 			for _, lp := range oc.orderTracker.lps {
-				assert.Truef(t, lp.reservedFunds.Empty(), "lp %s has reserved funds; got: %s", lp.address, lp.reservedFunds)
+				assert.Truef(
+					t,
+					lp.reservedFunds.Empty(),
+					"lp %s has reserved funds; got: %s",
+					lp.address,
+					lp.reservedFunds,
+				)
 				expectBalance := lpBalances[lp.address].Sub(expectTotalLPSpent[lp.address]...)
-				assert.Truef(t, expectBalance.IsEqual(lp.getBalance()),
-					"lp %s balance is not correct; expect: %s, got: %s", lp.address, expectBalance, lp.getBalance())
+				assert.Truef(
+					t,
+					expectBalance.IsEqual(lp.getBalance()),
+					"lp %s balance is not correct; expect: %s, got: %s",
+					lp.address,
+					expectBalance,
+					lp.getBalance(),
+				)
 			}
 		})
 	}
@@ -360,7 +410,10 @@ func Test_OrderFulfillment(t *testing.T) {
 		return nil
 	}
 
-	balance := sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210000000000)), sdk.NewCoin("adym", sdk.NewInt(150000000000)))
+	balance := sdk.NewCoins(
+		sdk.NewCoin("stake", sdk.NewInt(210000000000)),
+		sdk.NewCoin("adym", sdk.NewInt(150000000000)),
+	)
 	lpAddr := "lp-address"
 	lpBalances := make(map[string]sdk.Coins)
 	lpBalances[lpAddr] = balance
@@ -369,10 +422,13 @@ func Test_OrderFulfillment(t *testing.T) {
 		a, _ := cdctypes.NewAnyWithValue(&types.FulfillOrderAuthorization{
 			Rollapps: []*types.RollappCriteria{
 				{
-					RollappId:           "rollapp1",
-					Denoms:              []string{"stake", "adym"},
-					MinFeePercentage:    types.DecProto{Dec: math.LegacyMustNewDecFromStr("0.1")},
-					MaxPrice:            sdk.NewCoins(sdk.NewCoin("stake", sdk.NewInt(210)), sdk.NewCoin("adym", sdk.NewInt(150))),
+					RollappId:        "rollapp1",
+					Denoms:           []string{"stake", "adym"},
+					MinFeePercentage: types.DecProto{Dec: math.LegacyMustNewDecFromStr("0.1")},
+					MaxPrice: sdk.NewCoins(
+						sdk.NewCoin("stake", sdk.NewInt(210)),
+						sdk.NewCoin("adym", sdk.NewInt(150)),
+					),
 					OperatorFeeShare:    types.DecProto{Dec: math.LegacyMustNewDecFromStr("0.1")},
 					SpendLimit:          balance,
 					SettlementValidated: false,
@@ -520,8 +576,10 @@ func setupTestOrderClient(
 		for r := range cfg.Rollapps {
 			rollapps = append(rollapps, r)
 		}
+		queryService := newQueryService(hubClient.Context(), logger)
 		poller = newOrderPoller(
 			hubClient.Context(),
+			queryService,
 			ordTracker,
 			cfg.OrderPolling,
 			rollapps,
@@ -601,7 +659,12 @@ func (m *mockNodeClient) BroadcastTx(string, ...sdk.Msg) (cosmosclient.Response,
 	return cosmosclient.Response{TxResponse: &sdk.TxResponse{}}, nil
 }
 
-func (m *mockNodeClient) Subscribe(_ context.Context, _ string, query string, _ ...int) (out <-chan coretypes.ResultEvent, err error) {
+func (m *mockNodeClient) Subscribe(
+	_ context.Context,
+	_ string,
+	query string,
+	_ ...int,
+) (out <-chan coretypes.ResultEvent, err error) {
 	switch {
 	case strings.Contains(query, createdEvent):
 		return m.addOrderCh, nil

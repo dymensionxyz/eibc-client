@@ -6,19 +6,6 @@ run:
   tests: true
   modules-download-mode: readonly
 
-output:
-  formats:
-    text:
-      colors: true
-      path: stdout
-      print-issued-lines: true
-      print-linter-name: true
-  path-prefix: ""
-  sort-order:
-    - file
-    - severity
-    - linter
-
 linters:
   default: none
   enable:
